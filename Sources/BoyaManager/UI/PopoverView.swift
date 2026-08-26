@@ -8,55 +8,37 @@ struct PopoverView: View {
     let openSettings: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             header
-            SectionDivider()
-            ForEach(state.transmitters, id: \.index) { transmitter in
-                TransmitterRow(transmitter: transmitter)
+            transmitters
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeader(title: "Audio")
+                controls
             }
-            SectionDivider()
-            controls
-            SectionDivider()
             footer
         }
-        .padding(12)
-        .frame(width: 320)
+        .padding(14)
+        .frame(width: popoverWidth)
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(state.identity?.model ?? "BOYA mini 2")
-                    .font(.system(size: 13, weight: .semibold))
-                HStack(spacing: 6) {
-                    Text("Receiver").font(.system(size: 11)).foregroundStyle(.secondary)
-                    LevelBars(level: state.receiver.battery, tint: .secondary)
-                    Text(receiverDetail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-            }
+            Text(state.identity?.model ?? "BOYA mini 2")
+                .font(.system(size: 13, weight: .semibold))
             Spacer()
-            Button(action: openSettings) {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.borderless)
-            .help("Settings")
-            Button { NSApplication.shared.terminate(nil) } label: {
-                Image(systemName: "power")
-            }
-            .buttonStyle(.borderless)
-            .help("Quit BoyaManager")
+            StatusPill(state: state.connection) { state.retry() }
         }
     }
 
-    private var receiverDetail: String {
-        var parts: [String] = []
-        if let charging = state.receiver.charging, let label = Attr.rxCharging.labels?[charging], charging != 0 {
-            parts.append(label.lowercased())
+    private var transmitters: some View {
+        VStack(spacing: 8) {
+            ForEach(state.transmitters, id: \.index) { transmitter in
+                TransmitterRow(transmitter: transmitter)
+            }
         }
-        if let firmware = state.identity?.firmware { parts.append("v\(firmware)") }
-        return parts.joined(separator: " · ")
+        .padding(10)
+        .frame(maxWidth: .infinity)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder private var controls: some View {
@@ -72,7 +54,6 @@ struct PopoverView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 170)
             } else {
                 UnavailableValue()
             }
@@ -90,7 +71,6 @@ struct PopoverView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 170)
             } else {
                 UnavailableValue()
             }
@@ -101,12 +81,14 @@ struct PopoverView: View {
 
         LabeledControl(title: Attr.mute.title, isEnabled: state.isEnabled(.mute)) {
             if state.isAvailable(.mute) {
-                Toggle("", isOn: flagBinding(.mute)).labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                Toggle("", isOn: flagBinding(.mute))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
             } else {
                 UnavailableValue()
             }
         }
-
     }
 
     @ViewBuilder private func enumControl(_ attr: Attr) -> some View {
@@ -118,7 +100,6 @@ struct PopoverView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 170)
             } else {
                 UnavailableValue()
             }
@@ -126,39 +107,26 @@ struct PopoverView: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             // A write that timed out or was refused used to re-enable the
             // control at the old value and say nothing at all.
             if let error = state.writeError {
                 Text(error)
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 6) {
-                status
-                Spacer()
-                if case .failed = state.connection {
-                    Button("Retry") { state.retry() }
-                        .buttonStyle(.link)
-                        .font(.system(size: 10))
+            HStack {
+                Button(action: openSettings) {
+                    Label("Settings…", systemImage: "gearshape")
                 }
+                Spacer()
+                Button("Quit") { NSApplication.shared.terminate(nil) }
             }
+            .buttonStyle(.plain)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
         }
-    }
-
-    /// `Text(_:style:.relative)` keeps counting between polls; the same thing
-    /// formatted into a string sat at "0s ago" until the next redraw.
-    @ViewBuilder private var status: some View {
-        Group {
-            if state.connection.isReady, let lastUpdate = state.lastUpdate {
-                Text("Connected · updated \(Text(lastUpdate, style: .relative)) ago")
-            } else {
-                Text(state.statusLine)
-            }
-        }
-        .font(.system(size: 10))
-        .foregroundStyle(.secondary)
     }
 
     /// Every control reads back from the device, never from an optimistic local
@@ -176,7 +144,6 @@ struct PopoverView: View {
             set: { state.set(attr, to: $0 ? 1 : 0) }
         )
     }
-
 }
 
 /// One transmitter. `online` is the only trustworthy flag — the receiver leaves
@@ -191,21 +158,31 @@ private struct TransmitterRow: View {
                 .font(.system(size: 7))
                 .foregroundStyle(transmitter.isOnline ? Color.green : Color.secondary)
             Text("TX\(transmitter.index)")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .frame(width: 30, alignment: .leading)
             if transmitter.isOnline {
-                LevelBars(level: transmitter.battery)
-                Text("battery").font(.system(size: 10)).foregroundStyle(.secondary)
+                // Green, and red on the last bar — the same rule the menu bar
+                // icon follows, so the two never disagree.
+                LevelBars(level: transmitter.battery, tint: transmitter.battery == 1 ? .red : .green)
+                if transmitter.charging == 1 {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.green)
+                }
+                Text("battery").font(.system(size: 11)).foregroundStyle(.secondary)
                 LevelBars(level: transmitter.signal, tint: .secondary)
-                Text("signal").font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("signal").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 if let channel = transmitter.channel {
                     Text(channel == 0 ? "L" : "R")
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
                 }
             } else {
-                Text("offline").font(.system(size: 11)).foregroundStyle(.tertiary)
+                Text("offline").font(.system(size: 12)).foregroundStyle(.tertiary)
                 Spacer()
             }
         }

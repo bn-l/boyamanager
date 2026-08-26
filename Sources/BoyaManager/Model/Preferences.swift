@@ -10,27 +10,10 @@ private let logger = Logger(subsystem: BoyaLog.subsystem, category: "UI")
 @MainActor
 @Observable
 final class Preferences {
-    /// Which transmitter drives the menu bar icon.
-    enum IconSource: String, CaseIterable, Sendable {
-        case lowestOnline
-        case transmitter1
-        case transmitter2
-
-        var title: String {
-            switch self {
-            case .lowestOnline: "Lowest of the connected transmitters"
-            case .transmitter1: "Transmitter 1"
-            case .transmitter2: "Transmitter 2"
-            }
-        }
-    }
-
     private let defaults: UserDefaults
     private let loginItems: any LoginItemStore
 
     var pollSeconds: Int { didSet { store(pollSeconds, .pollSeconds) } }
-    var lowBatteryThreshold: Int { didSet { store(lowBatteryThreshold, .lowBatteryThreshold) } }
-    var iconSource: IconSource { didSet { store(iconSource.rawValue, .iconSource) } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, .notificationsEnabled) } }
     var notifyLowBattery: Bool { didSet { store(notifyLowBattery, .notifyLowBattery) } }
     var notifyTransmitterPresence: Bool { didSet { store(notifyTransmitterPresence, .notifyTransmitterPresence) } }
@@ -51,14 +34,11 @@ final class Preferences {
     }
 
     static let pollChoices = [1, 2, 5]
-    static let thresholdChoices = [1, 2]
 
     init(defaults: UserDefaults = .standard, loginItems: any LoginItemStore = AppLoginItem()) {
         self.defaults = defaults
         self.loginItems = loginItems
         pollSeconds = defaults.object(forKey: Key.pollSeconds.rawValue) as? Int ?? 2
-        lowBatteryThreshold = defaults.object(forKey: Key.lowBatteryThreshold.rawValue) as? Int ?? 1
-        iconSource = IconSource(rawValue: defaults.string(forKey: Key.iconSource.rawValue) ?? "") ?? .lowestOnline
         notificationsEnabled = defaults.object(forKey: Key.notificationsEnabled.rawValue) as? Bool ?? true
         notifyLowBattery = defaults.object(forKey: Key.notifyLowBattery.rawValue) as? Bool ?? true
         notifyTransmitterPresence = defaults.object(forKey: Key.notifyTransmitterPresence.rawValue) as? Bool ?? true
@@ -70,8 +50,6 @@ final class Preferences {
 
     private enum Key: String {
         case pollSeconds
-        case lowBatteryThreshold
-        case iconSource
         case notificationsEnabled
         case notifyLowBattery
         case notifyTransmitterPresence

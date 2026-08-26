@@ -8,15 +8,11 @@ struct MicStateTests {
     /// Async because the permission has to be read before anything can be
     /// posted — which is the whole point of the seam.
     private func makeState(
-        iconSource: Preferences.IconSource = .lowestOnline,
-        lowBatteryThreshold: Int = 1,
         notifications: Bool = true,
         centre: FakeNotificationCentre = FakeNotificationCentre(permission: .allowed)
     ) async -> MicState {
         let defaults = UserDefaults(suiteName: "boya-manager-tests-\(UUID().uuidString)")!
         let preferences = Preferences(defaults: defaults)
-        preferences.iconSource = iconSource
-        preferences.lowBatteryThreshold = lowBatteryThreshold
         preferences.notificationsEnabled = notifications
         let state = MicState(preferences: preferences, notifications: centre)
         await state.refreshNotificationPermission()
@@ -125,7 +121,7 @@ struct MicStateTests {
 
     @Test("The icon follows the lowest connected transmitter by default")
     func iconFollowsLowestOnline() async {
-        let state = await makeState(iconSource: .lowestOnline, lowBatteryThreshold: 0)
+        let state = await makeState()
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx1Online: 1, .tx1Battery: 4, .tx2Online: 1, .tx2Battery: 2])))
@@ -133,22 +129,22 @@ struct MicStateTests {
         #expect(state.iconKind == .level(2))
     }
 
-    @Test("The icon can be pinned to one transmitter")
-    func iconFollowsChosenTransmitter() async {
-        let state = await makeState(iconSource: .transmitter1, lowBatteryThreshold: 0)
+    @Test("An offline transmitter does not get a say, however low it was")
+    func iconIgnoresOfflineTransmitters() async {
+        let state = await makeState()
         state.apply(.state(.ready))
 
-        state.apply(.snapshot(snapshot([.tx1Online: 1, .tx1Battery: 4, .tx2Online: 1, .tx2Battery: 2])))
+        state.apply(.snapshot(snapshot([.tx1Online: 0, .tx1Battery: 1, .tx2Online: 1, .tx2Battery: 3])))
 
-        #expect(state.iconKind == .level(4))
+        #expect(state.iconKind == .level(3))
     }
 
-    @Test("A pinned transmitter that is offline leaves the icon showing offline, not the other one")
-    func pinnedOfflineShowsOffline() async {
-        let state = await makeState(iconSource: .transmitter1)
+    @Test("Nothing online leaves the icon showing offline")
+    func nothingOnlineShowsOffline() async {
+        let state = await makeState()
         state.apply(.state(.ready))
 
-        state.apply(.snapshot(snapshot([.tx1Online: 0, .tx2Online: 1, .tx2Battery: 3])))
+        state.apply(.snapshot(snapshot([.tx1Online: 0, .tx2Online: 0])))
 
         #expect(state.iconKind == .offline)
     }
@@ -170,14 +166,17 @@ struct MicStateTests {
         #expect(state.iconKind == .disconnected)
     }
 
-    @Test("Low battery is decided by the threshold, not by a fixed level")
-    func lowBatteryThreshold() async {
-        let low = await makeState(lowBatteryThreshold: 2)
+    /// The threshold used to be a setting. It has no job now that the icon
+    /// draws the last bar red: anything but one would put the warning and the
+    /// drawing at odds.
+    @Test("Low battery is exactly one bar left")
+    func lowBatteryIsOneBar() async {
+        let low = await makeState()
         low.apply(.state(.ready))
-        low.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 2])))
+        low.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 1])))
         #expect(low.isLowBattery)
 
-        let fine = await makeState(lowBatteryThreshold: 1)
+        let fine = await makeState()
         fine.apply(.state(.ready))
         fine.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 2])))
         #expect(!fine.isLowBattery)
@@ -185,7 +184,7 @@ struct MicStateTests {
 
     @Test("The low-battery notification fires once per online period, not once per poll")
     func lowBatteryNotifiesOnce() async {
-        let state = await makeState(lowBatteryThreshold: 1)
+        let state = await makeState()
         state.apply(.state(.ready))
         // Establish the transmitter as online and healthy first.
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
@@ -199,7 +198,7 @@ struct MicStateTests {
 
     @Test("Going offline and back arms the low-battery notification again")
     func lowBatteryRearmsAfterOfflinePeriod() async {
-        let state = await makeState(lowBatteryThreshold: 1)
+        let state = await makeState()
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 1])))
@@ -287,7 +286,7 @@ struct MicStateTests {
 
     @Test("Notifications are silent when switched off")
     func notificationsCanBeDisabled() async {
-        let state = await makeState(lowBatteryThreshold: 1, notifications: false)
+        let state = await makeState(notifications: false)
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
 
@@ -392,13 +391,15 @@ struct MicStateTests {
 
     @Test("The tooltip names the battery level and the receiver")
     func tooltip() async {
-        let state = await makeState(lowBatteryThreshold: 0)
+        let state = await makeState()
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
 
         #expect(state.tooltip.contains("battery 3 of 4"))
-        #expect(state.tooltip.contains("Receiver 4 of 4"))
+        // The receiver is bus-powered; `rx_battery` reads a permanent 4 and is
+        // not something to tell anyone about.
+        #expect(!state.tooltip.contains("Receiver"))
     }
 }
 

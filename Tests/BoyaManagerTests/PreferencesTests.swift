@@ -15,8 +15,6 @@ struct PreferencesTests {
         let preferences = Preferences(defaults: scratchDefaults())
 
         #expect(preferences.pollSeconds == 2)
-        #expect(preferences.lowBatteryThreshold == 1)
-        #expect(preferences.iconSource == .lowestOnline)
         #expect(preferences.notificationsEnabled)
         #expect(preferences.notifyLowBattery)
         #expect(preferences.notifyTransmitterPresence)
@@ -29,8 +27,6 @@ struct PreferencesTests {
         let first = Preferences(defaults: defaults)
 
         first.pollSeconds = 5
-        first.lowBatteryThreshold = 2
-        first.iconSource = .transmitter2
         first.notificationsEnabled = false
         first.notifyLowBattery = false
         first.notifyTransmitterPresence = false
@@ -38,8 +34,6 @@ struct PreferencesTests {
 
         let second = Preferences(defaults: defaults)
         #expect(second.pollSeconds == 5)
-        #expect(second.lowBatteryThreshold == 2)
-        #expect(second.iconSource == .transmitter2)
         #expect(!second.notificationsEnabled)
         #expect(!second.notifyLowBattery)
         #expect(!second.notifyTransmitterPresence)
@@ -54,12 +48,12 @@ struct PreferencesTests {
         #expect(!Preferences(defaults: defaults).notificationsEnabled)
     }
 
-    @Test("A nonsense stored icon source falls back rather than crashing")
+    @Test("A nonsense stored value falls back rather than crashing")
     func unknownStoredValue() {
         let defaults = scratchDefaults()
-        defaults.set("somethingElse", forKey: "iconSource")
+        defaults.set("somethingElse", forKey: "pollSeconds")
 
-        #expect(Preferences(defaults: defaults).iconSource == .lowestOnline)
+        #expect(Preferences(defaults: defaults).pollSeconds == 2)
     }
 
     @Test("The poll interval is the poll setting, as a Duration")
@@ -151,11 +145,6 @@ struct PreferencesTests {
     @Test("The offered choices are the ones the pickers show")
     func choices() {
         #expect(Preferences.pollChoices == [1, 2, 5])
-        #expect(Preferences.thresholdChoices == [1, 2])
-        #expect(Preferences.IconSource.allCases.count == 3)
-        for source in Preferences.IconSource.allCases {
-            #expect(!source.title.isEmpty)
-        }
     }
 }
 

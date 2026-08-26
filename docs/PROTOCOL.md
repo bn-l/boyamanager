@@ -477,8 +477,8 @@ BOYA's per-model list.
 | 45 | 2D | `tx_auto_poweroff` | RW | 0..1 | dev+api |
 | **47** | 2F | **`nc`** | **RW** ✔ | **0=Off, 1=Weak NC(−15dB), 2=Strong NC(−40dB)** | dev+api |
 | 48 | 30 | `mute` | RW ✔ | 0..1 | dev+api |
-| 61 | 3D | `rx_battery` | RO | 0..4 | dev+api |
-| 62 | 3E | `rx_charging` | RO | as id 2 | dev+api |
+| 61 | 3D | `rx_battery` | RO | 0..4 — **meaningless on the mini 2**, see below | dev+api |
+| 62 | 3E | `rx_charging` | RO | as id 2 — **meaningless on the mini 2**, see below | dev+api |
 | 63 | 3F | `tx1_online` | RO | **1=Online, 0=Offline** — BOYA's own label is inverted, see below | dev+api |
 | 64 | 40 | `tx2_online` | RO | as id 63 | dev+api |
 | **65** | 41 | **`rx_gain`** | **RW** ✔ | **1..6** | dev+api |
@@ -487,9 +487,14 @@ BOYA's per-model list.
 | 69 | 45 | `rx_speaker` | RW ⚠ | 0..1 — **restarts the receiver** | dev+api |
 | 71 | 47 | `rx_reset` | ⚠ | **factory reset** | dev+api |
 | 74 | 4A | `rx_camera_presets` | ? | 33-byte blob | dev |
-
 ✔ = read *and* write verified on hardware. ⚠ = has side effects; `boyactl.py`
 requires `--force`.
+
+**The receiver has no battery.** The mini 2 RX is bus-powered. `rx_battery`
+(61) and `rx_charging` (62) are family attributes that read a permanent 4 and 2
+("Fully Charged") on this model, whatever the receiver is doing. They are worth
+nothing to a user and BoyaManager shows neither; `--probe` still prints them
+because the device still reports them.
 
 **The settings you'd actually reach for:** `nc` (noise cancellation), `rx_gain`
 (output level, 1..6), `scene_mode` (this is where low cut lives on a mini 2),

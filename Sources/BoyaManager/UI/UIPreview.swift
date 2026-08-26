@@ -20,27 +20,49 @@ enum UIPreview {
         ])
     }
 
+    /// Both transmitters online, one of them down to its last bar — the state
+    /// the popover has the most to draw for.
+    private static var bothOnlineSnapshot: AttributeSnapshot {
+        var values = sampleSnapshot.values
+        values[Attr.tx1Online.rawValue] = [1]
+        values[Attr.tx1Battery.rawValue] = [1]
+        values[Attr.tx1Signal.rawValue] = [3]
+        values[Attr.tx1Charging.rawValue] = [1]
+        return AttributeSnapshot(status: 0, values: values)
+    }
+
     static func write(to directory: URL) {
         _ = NSApplication.shared
         let defaults = UserDefaults(suiteName: "boya-manager-preview") ?? .standard
         let preferences = Preferences(defaults: defaults)
-        let state = MicState(preferences: preferences)
-        state.apply(.state(.ready))
-        state.apply(.identified(previewIdentity))
-        state.apply(.snapshot(sampleSnapshot))
+        let size = NSSize(width: popoverWidth, height: 330)
 
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try render(PopoverView(state: state) {}, size: NSSize(width: 320, height: 420), to: directory.appending(path: "popover.png"))
+            try render(popover(preferences, sampleSnapshot), size: size, to: directory.appending(path: "popover.png"))
+            try render(popover(preferences, bothOnlineSnapshot), size: size, to: directory.appending(path: "popover-two-transmitters.png"))
+
+            let state = MicState(preferences: preferences)
+            state.apply(.state(.ready))
+            state.apply(.identified(previewIdentity))
+            state.apply(.snapshot(sampleSnapshot))
             try render(SettingsView(preferences: preferences, state: state), size: NSSize(width: 460, height: 380), to: directory.appending(path: "settings.png"))
 
             let disconnected = MicState(preferences: preferences)
             disconnected.apply(.state(.failed(.claimFailed)))
-            try render(PopoverView(state: disconnected) {}, size: NSSize(width: 320, height: 420), to: directory.appending(path: "popover-disconnected.png"))
+            try render(PopoverView(state: disconnected) {}, size: size, to: directory.appending(path: "popover-disconnected.png"))
             logger.notice("Wrote UI previews to \(directory.path, privacy: .public)")
         } catch {
             logger.error("UI preview failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private static func popover(_ preferences: Preferences, _ snapshot: AttributeSnapshot) -> PopoverView {
+        let state = MicState(preferences: preferences)
+        state.apply(.state(.ready))
+        state.apply(.identified(previewIdentity))
+        state.apply(.snapshot(snapshot))
+        return PopoverView(state: state) {}
     }
 
     private static var previewIdentity: DeviceIdentity {

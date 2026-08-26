@@ -43,12 +43,6 @@ private struct GeneralSettings: View {
                     ForEach(Preferences.pollChoices, id: \.self) { Text("\($0) seconds").tag($0) }
                 }
                 .onChange(of: preferences.pollSeconds) { state.applyPollInterval() }
-                Picker("Low battery at", selection: $preferences.lowBatteryThreshold) {
-                    ForEach(Preferences.thresholdChoices, id: \.self) { Text($0 == 1 ? "1 bar" : "\($0) bars").tag($0) }
-                }
-                Picker("Icon follows", selection: $preferences.iconSource) {
-                    ForEach(Preferences.IconSource.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
             }
 
             Section("Notifications") {
@@ -80,11 +74,6 @@ private struct GeneralSettings: View {
             Section {
                 LabeledContent("Version", value: Bundle.main.shortVersion)
                 HStack {
-                    Button("Copy log command") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(BoyaLog.streamCommand, forType: .string)
-                    }
-                    .help(BoyaLog.streamCommand)
                     Spacer()
                     Button("Quit BoyaManager") { NSApplication.shared.terminate(nil) }
                 }

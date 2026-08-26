@@ -147,18 +147,10 @@ final class MicState {
 
     var receiver: ReceiverState { snapshot.receiver }
 
-    /// The transmitter the icon follows, honouring the preference. Nil when
-    /// nothing is online.
+    /// The transmitter the icon follows: whichever online one has least left.
+    /// Nil when nothing is online.
     var iconTransmitter: TransmitterState? {
-        let online = transmitters.filter(\.isOnline)
-        switch preferences.iconSource {
-        case .lowestOnline:
-            return online.min { ($0.battery ?? 0) < ($1.battery ?? 0) }
-        case .transmitter1:
-            return online.first { $0.index == 1 }
-        case .transmitter2:
-            return online.first { $0.index == 2 }
-        }
+        transmitters.filter(\.isOnline).min { ($0.battery ?? 0) < ($1.battery ?? 0) }
     }
 
     var iconKind: MicBadgeIcon.Kind {
@@ -173,9 +165,13 @@ final class MicState {
         }
     }
 
+    /// One bar left. Fixed rather than configurable: the icon draws the last
+    /// bar red, so anything else would put the warning and the drawing at odds.
+    static let lowBatteryLevel: UInt8 = 1
+
     var isLowBattery: Bool {
         guard case .level(let level) = iconKind else { return false }
-        return Int(level) <= preferences.lowBatteryThreshold
+        return level <= Self.lowBatteryLevel
     }
 
     /// Deliberately without the "updated Ns ago" part: a string formatted once
@@ -196,10 +192,10 @@ final class MicState {
         }
     }
 
+    /// No receiver battery: the mini 2 receiver is bus-powered and `rx_battery`
+    /// reads a permanent 4.
     var tooltip: String {
-        var parts = [iconKind.accessibilityDescription]
-        if let battery = receiver.battery { parts.append("Receiver \(battery) of 4") }
-        return parts.joined(separator: " · ")
+        iconKind.accessibilityDescription
     }
 
     /// A control is only usable when the device reported the attribute and no
@@ -243,7 +239,7 @@ final class MicState {
             }
 
             guard transmitter.isOnline, preferences.notifyLowBattery,
-                  let battery = transmitter.battery, Int(battery) <= preferences.lowBatteryThreshold,
+                  let battery = transmitter.battery, battery <= Self.lowBatteryLevel,
                   !lowBatteryNotified.contains(index)
             else { continue }
             lowBatteryNotified.insert(index)
