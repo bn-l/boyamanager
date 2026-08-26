@@ -64,10 +64,10 @@ actor FakeAccessory: ByteTransport {
     private var isReset = false
     private var beatsBack: Bool
     private var isUnplugged = false
-    /// How many more looks at `wasTerminated` still answer "present". The real
-    /// receiver's interest handler does not fire for a yank at all, and IOKit's
-    /// own removal lands tens of milliseconds after the read fails, so the
-    /// first look at the moment the stream ends can be wrong.
+    /// How many more looks at `wasTerminated` still answer "present". A real
+    /// yank ends the stream by failing the bulk read, and every signal that the
+    /// device has gone lands about 50 ms later, so the first look — taken the
+    /// instant the stream ends — is wrong.
     private var terminationLag = 0
 
     var wasTerminated: Bool {

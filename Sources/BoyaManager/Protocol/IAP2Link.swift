@@ -366,12 +366,12 @@ actor IAP2Link {
     /// telling an unplug from a transport fault decides whether the user is
     /// shown a retry countdown for a device that is not there.
     ///
-    /// The transport's answer is looked at twice. On this receiver the
-    /// IOUSBHost interest handler does not fire for a yank at all — the read
-    /// fails, the stream ends, and IOKit's removal lands tens of milliseconds
-    /// later — so the first look, taken the instant the read failed, says
-    /// "still present". A close of our own has already set `end`, so it pays
-    /// nothing for the second look.
+    /// The transport's answer is looked at twice. A yank ends the stream by
+    /// failing the bulk read, and every signal that the device has gone —
+    /// IOKit's removal, the interest message, the registry emptying — arrives
+    /// around 50 ms after that. The first look is therefore taken before any of
+    /// them and says "still present". A close of our own has already set `end`,
+    /// so it pays nothing for the second look.
     private func transportEnded() async {
         var removed = await transport.wasTerminated
         if !removed, end == nil {
@@ -387,7 +387,8 @@ actor IAP2Link {
 
     /// How long to let IOKit catch up with a yank before calling the stream's
     /// ending something other than a removal. Measured gap on the device
-    /// between the read failing and the removal notification: 68 ms.
+    /// between the read failing and the removal landing: 48 ms and 68 ms across
+    /// two unplugs.
     private static let terminationGrace = Duration.milliseconds(250)
 
     // MARK: - send path

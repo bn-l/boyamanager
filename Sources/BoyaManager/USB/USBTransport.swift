@@ -48,12 +48,19 @@ actor USBTransport: ByteTransport {
     /// Whether the device has gone, rather than the stream having been closed
     /// from this side.
     ///
-    /// The interest handler is the documented signal and the cheap one, but on
-    /// this receiver it never fires for a yank: the bulk read simply fails and
-    /// the stream ends, with IOKit's own removal notification arriving tens of
-    /// milliseconds later. So the registry is asked as well — an interface that
-    /// is no longer published belongs to a device that is no longer there. It
-    /// can still lag the yank by a moment, which is why `IAP2Link` looks twice.
+    /// The interest handler is the documented signal, but on a yank it is not
+    /// the *first* one and cannot be relied on to arrive at all. Measured on
+    /// the device: the bulk read fails and ends the stream, IOKit's removal
+    /// notification lands 48 ms later and `kIOMessageServiceIsTerminated` 52 ms
+    /// later. Anything that reacts to the stream ending — which is everything —
+    /// therefore asks before either has happened. And if the interface is torn
+    /// down in that window, the message is never delivered: the first unplug
+    /// captured had no interest message in the log at all, because `close()`
+    /// ran a millisecond after the read failed.
+    ///
+    /// So the registry is asked as well: an interface that is no longer
+    /// published belongs to a device that is no longer there. That lags the
+    /// yank too, which is why `IAP2Link` looks twice.
     var wasTerminated: Bool {
         terminated.isSet || !USBTransport.interfaceIsPublished
     }

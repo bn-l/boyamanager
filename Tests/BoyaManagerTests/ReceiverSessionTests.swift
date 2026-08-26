@@ -396,12 +396,12 @@ struct ReceiverSessionTests {
         }
     }
 
-    /// Observed on the device: the IOUSBHost interest handler does not fire for
-    /// a yank at all. The bulk read fails, the stream ends, and IOKit's own
-    /// removal lands tens of milliseconds later — so a single look at the
-    /// moment the stream ends answers "still present" and the unplug is
-    /// announced as a dropped connection, complete with a retry countdown and
-    /// a burned attempt that then fails `deviceNotFound`.
+    /// Observed on the device: a yank ends the stream by failing the bulk read,
+    /// and every signal that the device has gone arrives about 50 ms after
+    /// that. A single look at the moment the stream ends therefore answers
+    /// "still present", and the unplug is announced as a dropped connection —
+    /// a retry countdown for an absent device, and a burned attempt that then
+    /// fails `deviceNotFound`.
     @Test("An unplug the OS is slow to report is still an unplug")
     func lateTerminationIsStillARemoval() async throws {
         try await withHarness { harness, accessory in
