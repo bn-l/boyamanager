@@ -1,0 +1,15 @@
+opt_in_rules:
+  - all
+analyzer_rules:
+  - all
+
+strict: true
+
+included:
+  - Sources
+  - Tests
+
+excluded:
+  - .build
+  - build
+  - scripts
