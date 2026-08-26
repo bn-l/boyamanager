@@ -107,8 +107,9 @@ struct CFDNode: Hashable, Sendable {
     var pid: UInt16
 
     static let broadcast = CFDNode(chid: 0, vid: 0, pid: 0)
-    /// The only node on a mini 2 that holds settings. It never heartbeats — the
-    /// node that does, `(2,2,30)`, advertises `isNoAtrr` and answers nothing.
+    /// The only node on a mini 2 that holds settings. It never heartbeats: the
+    /// receiver's own beats carry the broadcast handle `(0,0,0)`, so a reply is
+    /// told from a beat by the handle it is addressed to, not by src and dst.
     static let settings = CFDNode(chid: 1, vid: 2, pid: 29)
 }
 

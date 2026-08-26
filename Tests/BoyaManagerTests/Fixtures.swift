@@ -58,13 +58,15 @@ enum Fixtures {
     /// A device heartbeat, broadcast node, `src = 1`.
     static let deviceHeartbeat = bytes("55120d00285101021d0000000000000000a80000010ada0943010000240b")
 
-    /// The node that really does beat on a mini 2 — `docs/PROTOCOL.md` §9.
+    /// A node handle the host never sends to of its own accord. The receiver
+    /// really beats from the broadcast handle `(0,0,0)` — observed in the live
+    /// log — which is indistinguishable from the host's own beats, so the
+    /// tests use a handle that can only have come back from a reply.
     static let heartbeatingNode = CFDNode(chid: 2, vid: 2, pid: 30)
 
-    /// The same captured heartbeat, from `heartbeatingNode` rather than the
-    /// broadcast one. A reply to this carries the node handle back, which is
-    /// the only thing that tells a reply from the host's own broadcast beat —
-    /// `src`/`dst` are 2 → 1 for both.
+    /// The captured heartbeat, re-addressed from `heartbeatingNode`. A reply to
+    /// it carries that handle back, which is the only thing that tells a reply
+    /// from the host's own broadcast beat — `src`/`dst` are 2 → 1 for both.
     static let nodeHeartbeat = CFDLink.encode(
         message: .heartbeat,
         payload: Array(deviceHeartbeat[CFDLink.headerLength..<(deviceHeartbeat.count - 1)]),

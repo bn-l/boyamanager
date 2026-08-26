@@ -1,3 +1,6 @@
+# Everything on, then the rules that genuinely fight this codebase's style are
+# turned off one by one with the reason. `strict: true` makes every remaining
+# warning an error, so the list below is the whole of the argument.
 opt_in_rules:
   - all
 analyzer_rules:
@@ -13,3 +16,93 @@ excluded:
   - .build
   - build
   - scripts
+
+disabled_rules:
+  # Style rules that contradict how Swift is written everywhere, this codebase
+  # included. Turning them on would mean reformatting every file to look
+  # unlike Swift.
+  - contrasted_opening_brace       # `{` on its own line
+  - explicit_acl                   # `internal` spelled out on every member
+  - explicit_top_level_acl
+  - explicit_type_interface        # a type annotation on every property
+  - explicit_enum_raw_value        # a raw value on every case, inferred or not
+  - prefixed_toplevel_constant     # `k`-prefixed constants
+  - required_deinit                # a deinit on every class
+  - switch_case_on_newline         # forbids `case .foo: "bar"` one-liners
+  - conditional_returns_on_newline # forbids `guard x else { return }`
+  - multiline_arguments
+  - multiline_arguments_brackets
+  - multiline_parameters
+  - multiline_parameters_brackets
+  - vertical_whitespace_between_cases
+  - indentation_width              # disagrees with the compiler's own wrapping
+
+  # Layout rules that would break up deliberate groupings. `CFDLink.swift` is
+  # one protocol described in one place; `Attributes.swift` is the attribute
+  # table and the views over it. Splitting those by file or reordering their
+  # members by category makes them harder to read, not easier.
+  - one_declaration_per_file
+  - file_name
+  - file_types_order
+  - type_contents_order
+  - no_grouping_extension
+  - extension_access_modifier
+  - sorted_enum_cases              # `Attr` is ordered by attribute id
+
+  # `fileprivate` is used deliberately for helpers that belong to one file's
+  # types — `firstIndexOfLinkSync()`, the little-endian appenders.
+  - strict_fileprivate
+
+  # The protocol layers are made of byte offsets, attribute ids and packet
+  # lengths. Every one of them is documented at its use site and named
+  # constants for `payload[6]` would be worse.
+  - no_magic_numbers
+
+  # Shadowing is how Swift unwraps: `guard let preferences = preferences`.
+  - variable_shadowing
+
+  # Default parameters carry the timings, sleepers and stores that make this
+  # code testable without a device.
+  - discouraged_default_parameter
+
+line_length:
+  warning: 150
+  error: 200
+  ignores_comments: true
+  ignores_urls: true
+
+identifier_name:
+  # `id` and `to` are the names these things have in the protocol and in AppKit.
+  allowed_symbols: ["_"]
+  min_length: 2
+  excluded: [id, to, on, up]
+
+type_body_length:
+  warning: 400
+  error: 600
+
+file_length:
+  warning: 700
+  error: 900
+  ignore_comment_only_lines: true
+
+function_body_length:
+  warning: 70
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+
+large_tuple:
+  warning: 3
+  error: 4
+
+trailing_comma:
+  mandatory_comma: true
+
+force_unwrapping:
+  # Tests unwrap fixtures and scratch defaults that are wrong if they are nil,
+  # and a crash there is the loudest possible failure.
+  excluded:
+    - Tests
