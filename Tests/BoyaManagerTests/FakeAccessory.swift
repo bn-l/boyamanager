@@ -23,13 +23,27 @@ actor FakeAccessory: ByteTransport {
         var resetAfterIdentification = false
         /// Status reported for `StartExternalAccessoryProtocolSession`.
         var sessionStatus: UInt8 = 0
+        /// Answer `StartExternalAccessoryProtocolSession` at all. Off models an
+        /// accessory that simply never confirms the session.
+        var answersSessionStatus = true
+        /// Report the status against a different session than the one asked
+        /// for, which says nothing about ours.
+        var statusSessionOverride: UInt16?
         /// Answer CFD requests. Off makes every request time out.
         var answersRequests = true
+        /// Acknowledge N sequence numbers beyond the packet just received —
+        /// acknowledgements are cumulative, so this still acknowledges it.
+        var acknowledgesAhead: UInt8 = 0
         /// Hand the host's own frames back with `src` unchanged, the way the
         /// real router does.
         var echoesHostFrames = false
         /// Send a device heartbeat whenever the host sends one.
         var heartbeatsBack = true
+        /// `rx_speaker` restarts the receiver: the set is taken and the link
+        /// goes away, with no CFD reply and no read-back possible.
+        var restartsOnSpeakerWrite = false
+        /// `rx_reset` wipes it — same shape.
+        var resetsOnFactoryReset = false
     }
 
     private let options: Options
@@ -40,10 +54,15 @@ actor FakeAccessory: ByteTransport {
 
     private var accessorySeq: UInt8 = 0
     private var hostSeq: UInt8 = 0
+    /// The host sequence number acknowledged so far. Every accessory packet
+    /// carries it, which is how the real receiver piggybacks acknowledgements.
+    private var acknowledgedSeq: UInt8 = 0
     private var sentSYN = false
     private var droppedAnAck = false
     private var acknowledgesData = true
     private var isClosed = false
+    private var isReset = false
+    private(set) var wasTerminated = false
 
     /// Everything the host wrote, as parsed link packets — the transcript the
     /// no-SYN invariant is asserted over.
@@ -66,11 +85,22 @@ actor FakeAccessory: ByteTransport {
 
     // MARK: - ByteTransport
 
+    /// A reconnect builds a fresh transport against the same device, so a
+    /// closed accessory hands back a new stream and starts the handshake over.
+    /// Without that, every retry in a test failed at the claim and a session
+    /// that reconnects endlessly looked bounded.
     func inbound() -> AsyncStream<[UInt8]> {
-        if let stream { return stream }
+        if let stream, !isClosed || wasTerminated { return stream }
         let (stream, continuation) = AsyncStream.makeStream(of: [UInt8].self)
         self.stream = stream
         self.continuation = continuation
+        isClosed = false
+        isReset = false
+        sentSYN = false
+        accessorySeq = 0
+        hostSeq = 0
+        parser = LinkParser()
+        reassembler = CFDReassembler()
         return stream
     }
 
@@ -110,10 +140,12 @@ actor FakeAccessory: ByteTransport {
     }
 
     private func handle(_ packet: LinkPacket) {
+        // A link the accessory has reset answers nothing at all.
+        guard !isReset else { return }
         if packet.control.contains(.syn) {
             // The host answered our SYN. Acknowledge it and the link is up.
             hostSeq = packet.seq
-            emit(LinkPacket(control: .ack, seq: accessorySeq, ack: packet.seq, session: 0).encode())
+            acknowledge(packet.seq)
             return
         }
         guard !packet.payload.isEmpty else { return }  // bare ACK from the host
@@ -123,13 +155,18 @@ actor FakeAccessory: ByteTransport {
             return
         }
         hostSeq = packet.seq
-        emit(LinkPacket(control: .ack, seq: accessorySeq, ack: packet.seq, session: 0).encode())
+        acknowledge(packet.seq)
 
         if packet.session == 1 {
             handleControl(packet.payload)
         } else if packet.session == 2 {
             handleExternalAccessory(Array(packet.payload.dropFirst(2)))
         }
+    }
+
+    private func acknowledge(_ seq: UInt8) {
+        acknowledgedSeq = seq &+ options.acknowledgesAhead
+        emit(LinkPacket(control: .ack, seq: accessorySeq, ack: acknowledgedSeq, session: 0).encode())
     }
 
     private func handleControl(_ payload: [UInt8]) {
@@ -142,12 +179,16 @@ actor FakeAccessory: ByteTransport {
             if options.duplicateIdentification {
                 emitData(session: 1, payload: Fixtures.identificationInformation, seq: sequence)
             }
-            if options.resetAfterIdentification {
-                emit(LinkPacket(control: .rst, seq: nextAccessorySeq(), ack: hostSeq, session: 0).encode())
-            }
+            if options.resetAfterIdentification { resetLink() }
         case ControlMessage.ID.startExternalAccessorySession.rawValue:
+            guard options.answersSessionStatus else { return }
             var status = Fixtures.externalAccessoryStatusOpen
             status[status.count - 1] = options.sessionStatus
+            if let other = options.statusSessionOverride {
+                // Parameter 0's two-byte data is the session the status is about.
+                status[10] = other.bigEndianBytes[0]
+                status[11] = other.bigEndianBytes[1]
+            }
             emitData(session: 1, payload: status, seq: nextAccessorySeq())
         case ControlMessage.ID.stopExternalAccessorySession.rawValue:
             stopSessionCount += 1
@@ -167,7 +208,7 @@ actor FakeAccessory: ByteTransport {
                 sendFrames([Fixtures.echoedHostHeartbeat])
             }
             if frame.message == CFDMessage.heartbeat.rawValue {
-                if options.heartbeatsBack { sendFrames([Fixtures.deviceHeartbeat]) }
+                if options.heartbeatsBack { sendFrames([Fixtures.nodeHeartbeat]) }
                 continue
             }
             guard options.answersRequests else { continue }
@@ -180,8 +221,17 @@ actor FakeAccessory: ByteTransport {
                 sendFrames([reply(message: .getAttribute, id: id)])
             case CFDMessage.setAttribute.rawValue:
                 guard frame.payload.count >= 3 else { continue }
-                attributes[frame.payload[0]] = frame.payload[2]
-                sendFrames([reply(message: .setAttribute, id: frame.payload[0])])
+                let id = frame.payload[0]
+                // Writing these makes the receiver restart or wipe itself: the
+                // command is taken and the link goes away before it can answer.
+                let takesTheLinkWithIt = (options.restartsOnSpeakerWrite && id == Attr.rxSpeaker.rawValue)
+                    || (options.resetsOnFactoryReset && id == Attr.rxReset.rawValue)
+                attributes[id] = frame.payload[2]
+                if takesTheLinkWithIt {
+                    resetLink()
+                    continue
+                }
+                sendFrames([reply(message: .setAttribute, id: id)])
             default:
                 continue
             }
@@ -213,6 +263,21 @@ actor FakeAccessory: ByteTransport {
     func goQuiet() { acknowledgesData = false }
     func resume() { acknowledgesData = true }
 
+    /// RST: the accessory tears the link down and stops answering entirely.
+    func resetLink() {
+        guard !isReset else { return }
+        emit(LinkPacket(control: .rst, seq: nextAccessorySeq(), ack: hostSeq, session: 0).encode())
+        isReset = true
+    }
+
+    /// The device being pulled out: the interface is terminated under the
+    /// transport and the byte stream ends, with no orderly close.
+    func unplug() {
+        wasTerminated = true
+        isClosed = true
+        continuation?.finish()
+    }
+
     /// Sends the same EA data packet twice with the same sequence number — a
     /// retransmission, which the host must acknowledge twice but deliver once.
     func sendDuplicatedFrames(_ frames: [[UInt8]]) {
@@ -227,8 +292,12 @@ actor FakeAccessory: ByteTransport {
         return accessorySeq
     }
 
+    /// Carries the acknowledgement the accessory has actually reached, not the
+    /// packet it happens to be answering. Stamping the current host sequence
+    /// number here makes every reply acknowledge its own request, which is the
+    /// one ordering the receiver does *not* always produce.
     private func emitData(session: UInt8, payload: [UInt8], seq: UInt8) {
-        emit(LinkPacket(control: .ack, seq: seq, ack: hostSeq, session: session, payload: payload).encode())
+        emit(LinkPacket(control: .ack, seq: seq, ack: acknowledgedSeq, session: session, payload: payload).encode())
     }
 
     private func emit(_ bytes: [UInt8]) {
@@ -247,10 +316,13 @@ actor FakeAccessory: ByteTransport {
         hostPackets.count { $0.control.contains(.syn) && $0.control.contains(.ack) }
     }
 
-    /// Heartbeat replies the host addressed back to a specific node, with src
-    /// and dst swapped relative to the frame that prompted them.
+    /// Heartbeat *replies*, as opposed to the host's own broadcast beats.
+    ///
+    /// `src`/`dst` cannot tell them apart — both go 2 → 1 — so the node handle
+    /// is what distinguishes them: a reply carries the handle of whatever beat
+    /// at us, and the host's own beats go to `CFDNode.broadcast`.
     var hostHeartbeatRepliesToDevice: [CFDFrame] {
-        hostFrames.filter { $0.message == CFDMessage.heartbeat.rawValue && $0.dst == CFDLink.deviceNode }
+        hostFrames.filter { $0.message == CFDMessage.heartbeat.rawValue && $0.node == Fixtures.heartbeatingNode }
     }
 
     func rawWriteCount(of bytes: [UInt8]) -> Int {

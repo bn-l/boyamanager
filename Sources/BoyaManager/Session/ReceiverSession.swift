@@ -13,6 +13,8 @@ protocol AccessoryLink: Sendable {
     /// the link for, because another one follows in 500 ms.
     func sendHeartbeatEA(_ bytes: [UInt8]) async throws
     var eaInbound: AsyncStream<[UInt8]> { get }
+    /// Why the link stopped, once it has. Nil while it is alive.
+    var end: LinkEnd? { get async }
     func close() async
 }
 
@@ -94,6 +96,7 @@ actor ReceiverSession {
     private var startInstant = ContinuousClock.now
     private var answeredDeviceHeartbeat = false
     private var consecutiveTimeouts = 0
+    private var nextRequestID: UInt64 = 0
 
     private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingRequest: PendingRequest?
@@ -106,6 +109,9 @@ actor ReceiverSession {
     /// packet that asked — a reply that lands before the caller starts waiting
     /// is parked in `received` rather than dropped.
     private struct PendingRequest {
+        /// Its own timer names it, so a timer left over from a request that has
+        /// already been answered cannot expire the one after it.
+        let id: UInt64
         let message: UInt16
         let attribute: UInt8?
         var continuation: CheckedContinuation<CFDFrame?, Never>?
@@ -173,9 +179,7 @@ actor ReceiverSession {
                 )
                 publish(.identified(identity))
                 resetForNewSession()
-                state = .ready
                 publish(.state(.ready))
-                attempt = 0
                 logger.notice("Ready — \(identity.model ?? "receiver", privacy: .public) serial \(identity.serial ?? "?", privacy: .public)")
                 failure = await runReady(link: link!)
             } catch {
@@ -183,36 +187,38 @@ actor ReceiverSession {
                 logger.error("Connect failed: \(String(describing: error), privacy: .public) → \(String(describing: failure!), privacy: .public)")
             }
 
-            await link?.close()
+            // Cleared before the close, not after: a write that arrives while
+            // the link is being torn down must not find one to write to.
             currentLink = nil
+            await link?.close()
             failAnyPendingRequest()
 
             if isStopped { break }
             guard let failure else { continue }
-            if !devicePresent {
+            // A device that was pulled out is not a failure to retry. The
+            // watcher's own removal is still a second away behind its debounce,
+            // so the transport is what tells us first.
+            if failure == .deviceRemoved || !devicePresent {
                 logger.info("Device is gone — waiting for it to come back")
-                state = .idle
-                publish(.state(.idle))
+                devicePresent = false
+                if state != .idle { publish(.state(.idle)) }
                 attempt = 0
                 continue
             }
 
-            // `attempt` counts consecutive failures; reaching ready resets it,
-            // so a device that connects fine can never accumulate its way into
-            // a give-up.
+            // `attempt` counts consecutive failures. Only a receiver that has
+            // actually answered something resets it — see `pollLoop`.
             attempt += 1
             switch policy.decide(attempt: attempt, failure: failure) {
             case .retry(let delay):
                 let seconds = Int(delay.components.seconds)
-                logger.notice("\(failure.summary, privacy: .public) — retry in \(seconds, privacy: .public)s (attempt \(self.attempt, privacy: .public)/\(self.policy.maxAttempts, privacy: .public))")
-                state = .waitingToRetry(reason: failure, attempt: attempt, seconds: seconds)
-                publish(.state(state))
+                logger.notice("\(failure.summary, privacy: .public) — retry \(self.attempt, privacy: .public) of \(self.policy.maxAttempts, privacy: .public) in \(seconds, privacy: .public)s")
+                publish(.state(.waitingToRetry(reason: failure, attempt: attempt, seconds: seconds)))
                 try? await sleeper(delay)
             case .giveUp:
-                logger.error("Giving up after \(self.attempt, privacy: .public) attempts: \(failure.summary, privacy: .public)")
+                logger.error("Giving up after \(self.attempt, privacy: .public) connection attempts (\(self.policy.maxAttempts, privacy: .public) retries): \(failure.summary, privacy: .public)")
                 hasGivenUp = true
-                state = .failed(failure)
-                publish(.state(state))
+                publish(.state(.failed(failure)))
             }
         }
 
@@ -280,8 +286,7 @@ actor ReceiverSession {
             signalResume()
         case .removed:
             devicePresent = false
-            state = .idle
-            publish(.state(.idle))
+            if state != .idle { publish(.state(.idle)) }
             await currentLink?.close()
         }
     }
@@ -318,8 +323,17 @@ actor ReceiverSession {
                 await dispatch(frame, link: link)
             }
         }
-        logger.info("EA stream ended")
-        return .transport
+        // Whatever is waiting for a reply will never get one, and the task
+        // group cannot unwind until it stops waiting — otherwise a dead pump
+        // costs the whole request timeout before the reconnect even starts.
+        expirePendingRequest()
+        let end = await link.end
+        logger.info("EA stream ended (\(String(describing: end), privacy: .public))")
+        switch end {
+        case .reset: return .reset
+        case .deviceRemoved: return .deviceRemoved
+        case .transportEnded, .closed, .none: return .transport
+        }
     }
 
     private func dispatch(_ frame: CFDFrame, link: any AccessoryLink) async {
@@ -390,6 +404,12 @@ actor ReceiverSession {
             let reply = try? await request(.getMany, payload: [0], node: .settings, link: link)
             if let reply {
                 consecutiveTimeouts = 0
+                // The reconnect bound is reset here rather than on `ready`. A
+                // receiver that completes the handshake every time and then
+                // answers nothing used to reset it on every connection and
+                // cycle forever, which is the runaway loop the bound exists
+                // to stop.
+                attempt = 0
                 if isFirst {
                     logger.notice("Warm-up: first reply after \((ContinuousClock.now - issued).milliseconds, privacy: .public)ms")
                     isFirst = false
@@ -426,12 +446,14 @@ actor ReceiverSession {
         let frame = CFDLink.encode(message: message, payload: payload, node: node, seq: nextSeq())
         cfdLogger.debug("-> msg 0x\(String(message.rawValue, radix: 16), privacy: .public) \(payload.hexString, privacy: .public)")
 
-        pendingRequest = PendingRequest(message: message.rawValue, attribute: attribute)
+        nextRequestID += 1
+        let id = nextRequestID
+        pendingRequest = PendingRequest(id: id, message: message.rawValue, attribute: attribute)
         let timeout = timings.request
         let sleeper = sleeper
         let timer = Task { [weak self] in
             guard (try? await sleeper(timeout)) != nil else { return }
-            await self?.expirePendingRequest()
+            await self?.expirePendingRequest(id)
         }
         defer { timer.cancel() }
 
@@ -462,8 +484,11 @@ actor ReceiverSession {
         return reply
     }
 
-    private func expirePendingRequest() {
-        guard var pending = pendingRequest else { return }
+    /// - Parameter id: which request to expire, or nil for whatever is pending.
+    ///   A timer names its own request so that one left over from a request
+    ///   that has already been answered cannot expire the next one.
+    private func expirePendingRequest(_ id: UInt64? = nil) {
+        guard var pending = pendingRequest, id == nil || pending.id == id else { return }
         if let continuation = pending.continuation {
             pendingRequest = nil
             continuation.resume(returning: nil)
@@ -509,7 +534,53 @@ actor ReceiverSession {
     /// never calls this.
     func setRisky(_ attr: Attr, to value: UInt8) async {
         logger.notice("Risky write: \(attr.name, privacy: .public) = \(value, privacy: .public)")
-        await write(attr, value)
+        guard attr.isRisky else {
+            await write(attr, value)
+            return
+        }
+        await perform(attr, value)
+    }
+
+    /// Risky attributes are *actions*, not settings. `rx_speaker` restarts the
+    /// receiver and `rx_reset` wipes it, so the link usually dies between the
+    /// command and any read-back — putting them through the ordinary
+    /// set-then-read-back transaction reports a successful action as a timeout.
+    ///
+    /// The set reply's own status byte is the answer. Losing the link straight
+    /// after is the action taking effect, not a failure, and the ordinary
+    /// reconnect brings the receiver back.
+    private func perform(_ attr: Attr, _ value: UInt8) async {
+        if let range = attr.range, !range.contains(value) {
+            logger.error("\(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\(range.upperBound, privacy: .public), refused \(value, privacy: .public)")
+            publish(.writeResult(attr, .failure(.outOfRange(value, range))))
+            return
+        }
+        guard state.isReady, let link = currentLink else {
+            publish(.writeResult(attr, .failure(.notReady)))
+            return
+        }
+
+        guard let reply = try? await request(.setAttribute, payload: [attr.rawValue, 1, value], node: .settings, link: link) else {
+            guard await link.end != nil else {
+                logger.error("\(attr.name, privacy: .public) was not answered and the link is still up")
+                publish(.writeResult(attr, .failure(.timeout)))
+                return
+            }
+            logger.notice("\(attr.name, privacy: .public) took the link with it — that is the action working")
+            publish(.writeResult(attr, .success(value)))
+            return
+        }
+
+        // Unlike a setting, the reply's status is all there is: nothing can be
+        // read back from a receiver that is restarting.
+        let decoded = AttributeSnapshot(decoding: reply.payload)
+        guard decoded.isAvailable else {
+            logger.error("\(attr.name, privacy: .public) was refused (status \(decoded.status, privacy: .public))")
+            publish(.writeResult(attr, .failure(.unavailable)))
+            return
+        }
+        logger.notice("\(attr.name, privacy: .public) accepted")
+        publish(.writeResult(attr, .success(value)))
     }
 
     private func write(_ attr: Attr, _ value: UInt8) async {
@@ -567,7 +638,11 @@ actor ReceiverSession {
 
     // MARK: - plumbing
 
+    /// The only way `state` changes. Publishing and recording used to be two
+    /// steps, and they drifted: `state` was never set to `.connecting` at all,
+    /// and stayed `.ready` right through the link being torn down.
     private func publish(_ event: SessionEvent) {
+        if case .state(let new) = event { state = new }
         eventContinuation.yield(event)
     }
 
@@ -576,9 +651,11 @@ actor ReceiverSession {
         return seq
     }
 
+    /// Host uptime in milliseconds. `components.seconds * 1000` quantises this
+    /// to a second, so consecutive beats 500 ms apart carried the same value —
+    /// the exact mistake `Duration.milliseconds` exists to prevent.
     private func tick() -> UInt32 {
-        let elapsed = ContinuousClock.now - startInstant
-        return UInt32(truncatingIfNeeded: elapsed.components.seconds * 1000)
+        UInt32(truncatingIfNeeded: (ContinuousClock.now - startInstant).milliseconds)
     }
 
     private func waitForResume() async {
@@ -591,18 +668,26 @@ actor ReceiverSession {
         for waiter in waiting { waiter.resume() }
     }
 
-    private static func classify(_ error: any Error) -> FailureKind {
+    /// Which diagnosis the user and the log get. Internal so the mapping can be
+    /// tested — it used to call a failed bulk write an exclusive-access
+    /// problem, which sends anyone reading the log after the wrong thing.
+    static func classify(_ error: any Error) -> FailureKind {
         switch error {
         case let link as IAP2Link.LinkError:
             switch link {
             case .noSYN: .noSYN
             case .noIdentification, .noProtocols, .protocolNotOffered: .noIdentification
-            case .externalAccessoryRefused, .noSessions, .synAckNotAcknowledged: .sessionRefused
+            case .externalAccessoryRefused, .noSessions, .noSessionStatus, .synAckNotAcknowledged: .sessionRefused
             case .reset: .reset
             case .notLinked, .notAcknowledged: .transport
             }
-        case is USBTransport.TransportError:
-            .claimFailed
+        case let transport as USBTransport.TransportError:
+            switch transport {
+            // Nothing to open, or it would not open for us.
+            case .deviceNotFound, .matchingFailed, .claimFailed: .claimFailed
+            // Mid-session: the interface was ours and stopped working.
+            case .writeFailed, .closed: .transport
+            }
         default:
             .transport
         }

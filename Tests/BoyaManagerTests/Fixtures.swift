@@ -1,4 +1,5 @@
 import Foundation
+@testable import BoyaManager
 
 /// Bytes captured from a real BOYA mini 2 receiver, not bytes a test author
 /// invented. Every codec test checks against these, so a "fix" that changes the
@@ -56,6 +57,22 @@ enum Fixtures {
 
     /// A device heartbeat, broadcast node, `src = 1`.
     static let deviceHeartbeat = bytes("55120d00285101021d0000000000000000a80000010ada0943010000240b")
+
+    /// The node that really does beat on a mini 2 — `docs/PROTOCOL.md` §9.
+    static let heartbeatingNode = CFDNode(chid: 2, vid: 2, pid: 30)
+
+    /// The same captured heartbeat, from `heartbeatingNode` rather than the
+    /// broadcast one. A reply to this carries the node handle back, which is
+    /// the only thing that tells a reply from the host's own broadcast beat —
+    /// `src`/`dst` are 2 → 1 for both.
+    static let nodeHeartbeat = CFDLink.encode(
+        message: .heartbeat,
+        payload: Array(deviceHeartbeat[CFDLink.headerLength..<(deviceHeartbeat.count - 1)]),
+        node: heartbeatingNode,
+        seq: 0x5128,
+        src: CFDLink.deviceNode,
+        dst: CFDLink.hostNode
+    )
 
     /// Our own heartbeat handed straight back by the router — same `src = 2`,
     /// payload lightly rewritten. Answering these is the ping-pong loop.

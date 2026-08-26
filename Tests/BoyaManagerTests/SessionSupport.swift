@@ -113,13 +113,24 @@ actor Clock {
     nonisolated func sleeper() -> ReceiverSession.Sleeper {
         { [self] duration in
             await record(duration)
-            // A tenth of real time: long enough for the fake accessory to
-            // answer, short enough that a five-step backoff is three seconds.
-            let nanoseconds = duration.components.seconds * 100_000_000
-                + duration.components.attoseconds / 10_000_000_000
-            try await Task.sleep(for: .nanoseconds(max(1, nanoseconds)))
+            try await Clock.compress(duration)
         }
     }
+
+    /// A tenth of real time: long enough for the fake accessory to answer,
+    /// short enough that a five-step backoff is three seconds.
+    static func compress(_ duration: Duration) async throws {
+        let nanoseconds = duration.components.seconds * 100_000_000
+            + duration.components.attoseconds / 10_000_000_000
+        try await Task.sleep(for: .nanoseconds(max(1, nanoseconds)))
+    }
+
+    /// The same compression for `IAP2Link`, recording nothing — the link's own
+    /// timeouts have to shrink alongside the session's. Compressing one and not
+    /// the other leaves a test measuring two clocks against each other, which
+    /// is how "a quiet receiver does not drop the session" ended up depending
+    /// on 3.5 s of real time lining up with three 1 s retries.
+    nonisolated static let linkSleeper: IAP2Link.Sleeper = { try await Clock.compress($0) }
 }
 
 /// A session wired to a scripted accessory, with the device already "present".
@@ -158,10 +169,14 @@ struct SessionHarness {
         deviceContinuation.yield(event)
     }
 
+    /// Awaited, not fired and forgotten. A session torn down in a detached task
+    /// outlives its test and keeps its timers, fakes and log lines running
+    /// alongside whatever runs next.
     func finish() async {
         await session.shutdown()
-        await recorder.stop()
         deviceContinuation.finish()
         runTask.cancel()
+        await runTask.value
+        await recorder.stop()
     }
 }

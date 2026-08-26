@@ -26,6 +26,7 @@ final class Preferences {
     }
 
     private let defaults: UserDefaults
+    private let loginItems: any LoginItemStore
 
     var pollSeconds: Int { didSet { store(pollSeconds, .pollSeconds) } }
     var lowBatteryThreshold: Int { didSet { store(lowBatteryThreshold, .lowBatteryThreshold) } }
@@ -35,20 +36,26 @@ final class Preferences {
     var notifyTransmitterPresence: Bool { didSet { store(notifyTransmitterPresence, .notifyTransmitterPresence) } }
     var notifyReceiverDisconnected: Bool { didSet { store(notifyReceiverDisconnected, .notifyReceiverDisconnected) } }
 
-    /// Mirrors `SMAppService`, which is the real source of truth — the setting
-    /// can be revoked in System Settings without the app being told.
+    /// Mirrors the login-item registry, which is the real source of truth — the
+    /// setting can be revoked in System Settings without the app being told.
+    ///
+    /// Three states, not two. `requiresApproval` means registration worked but
+    /// the user has to confirm it in System Settings before it will ever run;
+    /// collapsing that to "off" made the toggle snap back with no explanation
+    /// and then fail on every attempt to switch it on again.
+    private(set) var loginItem: LoginItemState
+
     var launchAtLogin: Bool {
-        didSet {
-            guard launchAtLogin != Self.isRegisteredForLogin else { return }
-            apply(launchAtLogin: launchAtLogin)
-        }
+        get { loginItem != .off }
+        set { apply(launchAtLogin: newValue) }
     }
 
     static let pollChoices = [1, 2, 5]
     static let thresholdChoices = [1, 2]
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, loginItems: any LoginItemStore = AppLoginItem()) {
         self.defaults = defaults
+        self.loginItems = loginItems
         pollSeconds = defaults.object(forKey: Key.pollSeconds.rawValue) as? Int ?? 2
         lowBatteryThreshold = defaults.object(forKey: Key.lowBatteryThreshold.rawValue) as? Int ?? 1
         iconSource = IconSource(rawValue: defaults.string(forKey: Key.iconSource.rawValue) ?? "") ?? .lowestOnline
@@ -56,7 +63,7 @@ final class Preferences {
         notifyLowBattery = defaults.object(forKey: Key.notifyLowBattery.rawValue) as? Bool ?? true
         notifyTransmitterPresence = defaults.object(forKey: Key.notifyTransmitterPresence.rawValue) as? Bool ?? true
         notifyReceiverDisconnected = defaults.object(forKey: Key.notifyReceiverDisconnected.rawValue) as? Bool ?? true
-        launchAtLogin = Self.isRegisteredForLogin
+        loginItem = loginItems.state
     }
 
     var pollInterval: Duration { .seconds(pollSeconds) }
@@ -76,26 +83,69 @@ final class Preferences {
         logger.info("Preference \(key.rawValue, privacy: .public) = \(String(describing: value), privacy: .public)")
     }
 
-    private static var isRegisteredForLogin: Bool {
-        guard Bundle.main.bundleIdentifier != nil else { return false }
-        return SMAppService.mainApp.status == .enabled
+    /// Re-reads the registry. The user can revoke a login item in System
+    /// Settings while the app is running and nothing tells the app about it.
+    func refreshLoginItem() {
+        loginItem = loginItems.state
     }
 
+    func openLoginItemsSettings() {
+        loginItems.openSettings()
+    }
+
+    /// The registry, not the toggle, decides what the state ends up as: asking
+    /// to register can land in `needsApproval`, and asking again once it has
+    /// throws `kSMErrorAlreadyRegistered`. Either way the answer is whatever
+    /// the registry says afterwards.
     private func apply(launchAtLogin enabled: Bool) {
-        guard Bundle.main.bundleIdentifier != nil else {
-            logger.error("Launch at login needs the bundled app, not a bare executable")
-            return
-        }
         do {
             if enabled {
-                try SMAppService.mainApp.register()
+                try loginItems.register()
             } else {
-                try SMAppService.mainApp.unregister()
+                try loginItems.unregister()
             }
-            logger.notice("Launch at login \(enabled ? "enabled" : "disabled", privacy: .public)")
         } catch {
             logger.error("Launch at login change failed: \(error.localizedDescription, privacy: .public)")
-            launchAtLogin = Self.isRegisteredForLogin
+        }
+        loginItem = loginItems.state
+        logger.notice("Launch at login is \(String(describing: self.loginItem), privacy: .public)")
+    }
+}
+
+/// What the login-item registry says about this app.
+enum LoginItemState: Sendable, Equatable {
+    case off
+    case on
+    /// Registered, but the user has to approve it in System Settings before it
+    /// will ever run. Also what a revoked consent looks like.
+    case needsApproval
+}
+
+/// The seam `PreferencesTests` drives instead of the real registry —
+/// `SMAppService` talks to a system daemon and cannot be exercised from a test.
+@MainActor
+protocol LoginItemStore {
+    var state: LoginItemState { get }
+    func register() throws
+    func unregister() throws
+    func openSettings()
+}
+
+struct AppLoginItem: LoginItemStore {
+    var state: LoginItemState {
+        // A bare `swift run` executable has no bundle, so there is nothing for
+        // the registry to register.
+        guard Bundle.main.bundleIdentifier != nil else { return .off }
+        switch SMAppService.mainApp.status {
+        case .enabled: return .on
+        case .requiresApproval: return .needsApproval
+        default: return .off
         }
     }
+
+    func register() throws { try SMAppService.mainApp.register() }
+
+    func unregister() throws { try SMAppService.mainApp.unregister() }
+
+    func openSettings() { SMAppService.openSystemSettingsLoginItems() }
 }

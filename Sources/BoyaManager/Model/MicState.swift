@@ -83,32 +83,48 @@ final class MicState {
     func apply(_ event: SessionEvent) {
         switch event {
         case .state(let state):
+            let wasReady = connection.isReady
             connection = state
             if state.isReady {
                 wasEverReady = true
                 lastError = nil
+            } else if wasReady {
+                // Leaving ready: everything on screen came from a receiver we
+                // are no longer talking to, and showing a stale battery as
+                // live is worse than showing nothing.
+                clearLiveData()
+                notifyReceiverGone(state: state)
             }
             if case .failed(let kind) = state { lastError = kind.summary }
             if case .waitingToRetry(let kind, _, _) = state { lastError = kind.summary }
-            if state == .idle || !state.isReady {
-                notifyReceiverGoneIfNeeded(state: state)
-            }
         case .identified(let identity):
             self.identity = identity
         case .snapshot(let snapshot):
             self.snapshot = snapshot
             lastUpdate = Date()
+            lastError = nil
             checkTransmitterNotifications()
         case .writeResult(let attr, let result):
             pendingWrites.remove(attr)
             switch result {
             case .success(let value):
+                lastError = nil
                 logger.info("Write confirmed \(attr.name, privacy: .public) = \(value, privacy: .public)")
             case .failure(let error):
                 lastError = Self.describe(error, attr: attr)
                 logger.error("Write failed \(attr.name, privacy: .public): \(String(describing: error), privacy: .public)")
             }
         }
+    }
+
+    /// Nothing the receiver told us survives losing it.
+    private func clearLiveData() {
+        snapshot = AttributeSnapshot()
+        identity = nil
+        lastUpdate = nil
+        lastKnownOnline = [:]
+        lowBatteryNotified = []
+        pendingWrites = []
     }
 
     private static func describe(_ error: SessionError, attr: Attr) -> String {
@@ -158,12 +174,13 @@ final class MicState {
         return Int(level) <= preferences.lowBatteryThreshold
     }
 
+    /// Deliberately without the "updated Ns ago" part: a string formatted once
+    /// sat at "0s ago" until the next poll redrew it. The popover renders that
+    /// with `Text(_:style:.relative)`, which keeps counting on its own.
     var statusLine: String {
         switch connection {
         case .ready:
-            guard let lastUpdate else { return "Connected" }
-            let seconds = max(0, Int(Date().timeIntervalSince(lastUpdate)))
-            return "Connected · updated \(seconds)s ago"
+            return "Connected"
         case .connecting(let attempt):
             return attempt > 1 ? "Connecting… (attempt \(attempt))" : "Connecting…"
         case .waitingToRetry(let reason, let attempt, let seconds):
@@ -192,6 +209,13 @@ final class MicState {
     }
 
     func value(_ attr: Attr) -> UInt8? { snapshot.byte(attr) }
+
+    /// A failed write, in words the popover shows under the controls. Only
+    /// while connected: a connection problem is already spelled out by
+    /// `statusLine` and does not need saying twice.
+    var writeError: String? {
+        connection.isReady ? lastError : nil
+    }
 
     // MARK: - notifications
 
@@ -223,11 +247,19 @@ final class MicState {
         }
     }
 
-    private func notifyReceiverGoneIfNeeded(state: ConnectionState) {
+    /// Announced on the transition out of ready, whatever the receiver went to.
+    /// Waiting for `.failed` meant the common case — an unplug, which goes
+    /// straight to idle — was never announced at all, and the give-up after a
+    /// later replug was announced with the wrong reason.
+    private func notifyReceiverGone(state: ConnectionState) {
         guard wasEverReady, preferences.notifyReceiverDisconnected else { return }
-        guard case .failed(let reason) = state else { return }
         wasEverReady = false
-        notify(title: "BOYA receiver disconnected", body: reason.summary.capitalizedFirst)
+        let reason: String
+        switch state {
+        case .failed(let kind), .waitingToRetry(let kind, _, _): reason = kind.summary.capitalizedFirst
+        default: reason = "It is no longer connected."
+        }
+        notify(title: "BOYA receiver disconnected", body: reason)
     }
 
     private func notify(title: String, body: String) {

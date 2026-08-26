@@ -78,16 +78,19 @@ struct PopoverView: View {
             }
         }
 
+        // Segmented rather than a slider: the control is bound to the value the
+        // device reads back, so it goes inert for a round trip on every change.
+        // A slider does that mid-drag and snaps back; six discrete taps do not.
         LabeledControl(title: Attr.rxGain.title, isEnabled: state.isEnabled(.rxGain)) {
             if state.isAvailable(.rxGain) {
-                HStack(spacing: 6) {
-                    Slider(value: gainBinding, in: 1...6, step: 1)
-                        .frame(width: 140)
-                    Text("\(state.value(.rxGain) ?? 0)")
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14, alignment: .trailing)
+                Picker("", selection: binding(.rxGain)) {
+                    ForEach(1...6, id: \.self) { level in
+                        Text("\(level)").tag(UInt8(level))
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 170)
             } else {
                 UnavailableValue()
             }
@@ -123,17 +126,39 @@ struct PopoverView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 6) {
-            Text(state.statusLine)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Spacer()
-            if case .failed = state.connection {
-                Button("Retry") { state.retry() }
-                    .buttonStyle(.link)
+        VStack(alignment: .leading, spacing: 4) {
+            // A write that timed out or was refused used to re-enable the
+            // control at the old value and say nothing at all.
+            if let error = state.writeError {
+                Text(error)
                     .font(.system(size: 10))
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 6) {
+                status
+                Spacer()
+                if case .failed = state.connection {
+                    Button("Retry") { state.retry() }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
+                }
             }
         }
+    }
+
+    /// `Text(_:style:.relative)` keeps counting between polls; the same thing
+    /// formatted into a string sat at "0s ago" until the next redraw.
+    @ViewBuilder private var status: some View {
+        Group {
+            if state.connection.isReady, let lastUpdate = state.lastUpdate {
+                Text("Connected · updated \(Text(lastUpdate, style: .relative)) ago")
+            } else {
+                Text(state.statusLine)
+            }
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
     }
 
     /// Every control reads back from the device, never from an optimistic local
@@ -152,12 +177,6 @@ struct PopoverView: View {
         )
     }
 
-    private var gainBinding: Binding<Double> {
-        Binding(
-            get: { Double(state.value(.rxGain) ?? 1) },
-            set: { state.set(.rxGain, to: UInt8($0.rounded())) }
-        )
-    }
 }
 
 /// One transmitter. `online` is the only trustworthy flag — the receiver leaves

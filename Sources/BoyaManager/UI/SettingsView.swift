@@ -26,6 +26,19 @@ private struct GeneralSettings: View {
         Form {
             Section {
                 Toggle("Launch at login", isOn: $preferences.launchAtLogin)
+                // Registration can succeed and still not run: macOS parks it
+                // until the user confirms. Saying so beats a toggle that looks
+                // on and does nothing.
+                if preferences.loginItem == .needsApproval {
+                    LabeledContent("") {
+                        HStack {
+                            Text("Waiting for your approval in System Settings.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Open Login Items…") { preferences.openLoginItemsSettings() }
+                        }
+                    }
+                }
                 Picker("Refresh every", selection: $preferences.pollSeconds) {
                     ForEach(Preferences.pollChoices, id: \.self) { Text("\($0) seconds").tag($0) }
                 }
@@ -62,6 +75,9 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
+        // The login item can be revoked in System Settings while the app runs
+        // and nothing tells the app about it.
+        .onAppear { preferences.refreshLoginItem() }
     }
 }
 

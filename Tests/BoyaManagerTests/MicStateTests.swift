@@ -247,15 +247,69 @@ struct MicStateTests {
         #expect(connected.notificationLog.count { $0.contains("receiver disconnected") } == 1)
     }
 
-    @Test("A failed write is reported in words the popover can show")
-    func writeFailureMessage() {
+    /// `lastError` used to be written and never read: a timed-out or refused
+    /// write re-enabled the control at the old value and said nothing at all.
+    @Test("A failed write is shown under the controls, and cleared by the next good poll")
+    func writeFailureIsVisible() {
         let state = makeState()
         state.apply(.state(.ready))
 
         state.apply(.writeResult(.rxGain, .failure(.outOfRange(9, 1...6))))
 
-        #expect(state.lastError?.contains("Output Gain") == true)
+        #expect(state.writeError?.contains("Output Gain") == true)
         #expect(state.pendingWrites.isEmpty)
+
+        state.apply(.snapshot(snapshot()))
+        #expect(state.writeError == nil, "a good poll means the receiver is answering again")
+    }
+
+    @Test("A connection problem is not repeated under the controls — the status line says it")
+    func connectionProblemIsNotAWriteError() {
+        let state = makeState()
+        state.apply(.state(.ready))
+
+        state.apply(.state(.failed(.unresponsive)))
+
+        #expect(state.lastError != nil)
+        #expect(state.writeError == nil)
+    }
+
+    /// The popover kept showing the receiver's battery, firmware and a green
+    /// "online" transmitter with bars while the footer said "No receiver
+    /// connected".
+    @Test("Losing the receiver clears everything that looked live")
+    func losingTheReceiverClearsLiveData() {
+        let state = makeState()
+        state.apply(.state(.ready))
+        state.apply(.identified(DeviceIdentity()))
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
+
+        state.apply(.state(.idle))
+
+        #expect(state.transmitters.allSatisfy { !$0.isOnline })
+        #expect(state.transmitters.allSatisfy { $0.liveBattery == nil })
+        #expect(state.receiver.battery == nil)
+        #expect(state.identity == nil)
+        #expect(state.lastUpdate == nil)
+        #expect(!state.isAvailable(.noiseCancellation))
+    }
+
+    /// The disconnect notification only fired on `.failed`, so the most common
+    /// disconnection of all — an unplug, which goes straight to idle — was
+    /// never announced.
+    @Test("The receiver going away is announced exactly once, whatever route it takes")
+    func disconnectAnnouncedOnce() {
+        let unplugged = makeState()
+        unplugged.apply(.state(.ready))
+        unplugged.apply(.state(.idle))
+        #expect(unplugged.notificationLog.count { $0.contains("receiver disconnected") } == 1)
+
+        let viaRetry = makeState()
+        viaRetry.apply(.state(.ready))
+        viaRetry.apply(.state(.waitingToRetry(reason: .transport, attempt: 1, seconds: 1)))
+        viaRetry.apply(.state(.idle))
+        #expect(viaRetry.notificationLog.count { $0.contains("receiver disconnected") } == 1,
+                "a retry followed by giving up is one disconnection, not two")
     }
 
     @Test("The status line says what is happening in each state")

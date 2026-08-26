@@ -13,6 +13,20 @@ private let logger = Logger(subsystem: BoyaLog.subsystem, category: "IAP2")
 /// makes the receiver re-enumerate itself a moment later, so no code path here
 /// originates a SYN — `IAP2LinkTests` asserts that over a whole transcript.
 ///
+/// Why a link stopped carrying data. The session reads this rather than
+/// guessing from the fact that a stream ended — "the receiver reset us", "it
+/// was unplugged" and "we closed it" all look identical from the stream.
+enum LinkEnd: Sendable, Equatable {
+    /// The accessory sent RST.
+    case reset
+    /// The device was pulled out — the interface was terminated under us.
+    case deviceRemoved
+    /// The byte stream ended for some other reason.
+    case transportEnded
+    /// `close()` — an orderly teardown.
+    case closed
+}
+
 /// See `docs/PROTOCOL.md` §13.
 actor IAP2Link {
     enum LinkError: Error, Sendable, Equatable {
@@ -23,12 +37,19 @@ actor IAP2Link {
         case noProtocols
         case protocolNotOffered(String)
         case externalAccessoryRefused(UInt8)
+        /// The accessory never answered `StartExternalAccessoryProtocolSession`.
+        /// Treating that silence as success leaves the session looking open and
+        /// the real failure surfaces fifteen seconds later as "unresponsive".
+        case noSessionStatus
         case reset
         case notLinked
         case notAcknowledged(UInt8)
     }
 
+    typealias Sleeper = @Sendable (Duration) async throws -> Void
+
     private let transport: any ByteTransport
+    private let sleeper: Sleeper
     private var parser = LinkParser()
 
     /// Our sequence number. Random at start like a real host, injectable so the
@@ -48,6 +69,8 @@ actor IAP2Link {
     private var externalAccessorySessionID: UInt16 = 1
     private var isLinked = false
     private var wasReset = false
+    private var isClosing = false
+    private(set) var end: LinkEnd?
 
     private var pumpTask: Task<Void, Never>?
     private let inboundStream: AsyncStream<[UInt8]>
@@ -72,8 +95,17 @@ actor IAP2Link {
     private var isSending = false
     private var sendLockWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(transport: any ByteTransport, initialSequence: UInt8? = nil) {
+    /// - Parameter sleeper: every timeout here goes through it, so a test can
+    ///   run the link on the same compressed clock as the session above it.
+    ///   Two clocks measured against each other is how a "quiet receiver" test
+    ///   ends up depending on real-time coincidence.
+    init(
+        transport: any ByteTransport,
+        initialSequence: UInt8? = nil,
+        sleeper: @escaping Sleeper = { try await Task.sleep(for: $0) }
+    ) {
         self.transport = transport
+        self.sleeper = sleeper
         self.seq = initialSequence ?? UInt8.random(in: 1...199)
         (inboundStream, inboundContinuation) = AsyncStream.makeStream(of: [UInt8].self)
     }
@@ -99,6 +131,7 @@ actor IAP2Link {
 
         try await send(control: ControlMessage(id: .startIdentification))
         guard await waitFor(.identified, timeout: .seconds(3)) else {
+            if wasReset { throw LinkError.reset }
             logger.error("No IdentificationInformation from the accessory")
             throw LinkError.noIdentification
         }
@@ -109,7 +142,7 @@ actor IAP2Link {
             """)
         try await send(control: ControlMessage(id: .identificationAccepted))
         // Let PowerSourceUpdate and friends drain before asking for a session.
-        try? await Task.sleep(for: .milliseconds(300))
+        try? await sleeper(.milliseconds(300))
 
         guard !identity.protocols.isEmpty else { throw LinkError.noProtocols }
         guard let offered = identity.protocols.first(where: { $0.name == protocolName }) else {
@@ -126,8 +159,16 @@ actor IAP2Link {
                 ControlParameter(id: 1, data: sessionID.bigEndianBytes),
             ]
         ))
-        _ = await waitFor(.externalAccessoryStatus, timeout: .seconds(1))
-        if let status = externalAccessoryStatus, status != 0 {
+        // Silence is not consent: without a status for *this* session id the
+        // session is not open, whatever the accessory does next.
+        guard await waitFor(.externalAccessoryStatus, timeout: .seconds(1)),
+              let status = externalAccessoryStatus
+        else {
+            if wasReset { throw LinkError.reset }
+            logger.error("Accessory never reported a status for EA session \(sessionID, privacy: .public)")
+            throw LinkError.noSessionStatus
+        }
+        guard status == 0 else {
             logger.error("Accessory refused the EA session, status \(status, privacy: .public)")
             throw LinkError.externalAccessoryRefused(status)
         }
@@ -137,7 +178,9 @@ actor IAP2Link {
 
     /// Writes bytes into the EA session and waits for the link acknowledgement.
     func sendEA(_ bytes: [UInt8]) async throws {
-        guard isLinked, let session = sessionExternalAccessory else { throw LinkError.notLinked }
+        guard isLinked, let session = sessionExternalAccessory else {
+            throw end == .reset ? LinkError.reset : LinkError.notLinked
+        }
         try await sendData(session: session, payload: externalAccessorySessionID.bigEndianBytes + bytes)
     }
 
@@ -149,7 +192,9 @@ actor IAP2Link {
     /// to poll next. Heartbeats go out every 500 ms and are idempotent, so the
     /// next one covers a lost beat and a retransmission buys nothing.
     func sendHeartbeatEA(_ bytes: [UInt8]) async throws {
-        guard isLinked, let session = sessionExternalAccessory else { throw LinkError.notLinked }
+        guard isLinked, let session = sessionExternalAccessory else {
+            throw end == .reset ? LinkError.reset : LinkError.notLinked
+        }
         do {
             try await sendData(
                 session: session,
@@ -163,16 +208,27 @@ actor IAP2Link {
     }
 
     /// Tells the accessory the session is over, then tears everything down.
-    /// Capped so a wedged link cannot delay app quit.
+    ///
+    /// Capped so a wedged link cannot delay app quit: the StopEA packet goes
+    /// out around the send lock rather than through it, because waiting for
+    /// that lock means waiting for up to three acknowledgement timeouts of
+    /// whatever is already in flight. That sender is told to give up instead.
     func close() async {
-        if isLinked, sessionControl != nil {
+        guard !isClosing else { return }
+        isClosing = true
+        if isLinked, let session = sessionControl {
             let stop = ControlMessage(
                 id: .stopExternalAccessorySession,
                 parameters: [ControlParameter(id: 0, data: externalAccessorySessionID.bigEndianBytes)]
             )
-            try? await send(control: stop, timeout: .milliseconds(300), retries: 1)
+            logger.debug("-> \(stop.name, privacy: .public)")
+            seq = seq &+ 1
+            let packet = LinkPacket(control: .ack, seq: seq, ack: rack, session: session, payload: stop.encode())
+            try? await transport.write(packet.encode())
+            _ = await waitFor(.acknowledged(seq), timeout: .milliseconds(300))
         }
         isLinked = false
+        end = end ?? .closed
         pumpTask?.cancel()
         pumpTask = nil
         failAllWaiters()
@@ -249,6 +305,11 @@ actor IAP2Link {
             logger.error("Accessory reset the iAP2 link")
             isLinked = false
             wasReset = true
+            end = .reset
+            // Everything waiting is waiting for something that will never come
+            // now, and the session above has to learn the link is gone.
+            failAllWaiters()
+            inboundContinuation.finish()
             return
         }
         guard !packet.payload.isEmpty else { return }  // bare ACK
@@ -279,16 +340,26 @@ actor IAP2Link {
             identity = DeviceIdentity(parsing: message.parameters)
             isIdentified = true
         case ControlMessage.ID.statusExternalAccessorySession.rawValue:
+            // Parameter 0 is the session the status is about. A status for a
+            // session we did not ask for says nothing about ours.
+            let reported = message.parameters.first { $0.id == 0 }?.data
+            guard reported == nil || reported == externalAccessorySessionID.bigEndianBytes else {
+                logger.info("EA status for session \(reported?.hexString ?? "?", privacy: .public) — not ours")
+                return
+            }
             externalAccessoryStatus = message.parameters.first { $0.id == 1 }?.data.first
         default:
             break
         }
     }
 
-    private func transportEnded() {
-        logger.info("Transport stream ended")
+    private func transportEnded() async {
+        // The transport knows whether the interface was terminated under it,
+        // which is the difference between "unplugged" and "something broke".
+        let removed = await transport.wasTerminated
+        logger.info("Transport stream ended (\(removed ? "device removed" : "closed", privacy: .public))")
         isLinked = false
-        wasReset = true
+        end = end ?? (removed ? .deviceRemoved : .transportEnded)
         failAllWaiters()
         inboundContinuation.finish()
     }
@@ -307,6 +378,7 @@ actor IAP2Link {
     private func sendData(session: UInt8, payload: [UInt8], timeout: Duration = .seconds(1), retries: Int = 3) async throws {
         await acquireSendLock()
         defer { releaseSendLock() }
+        guard end == nil else { throw end == .reset ? LinkError.reset : LinkError.notLinked }
 
         seq = seq &+ 1
         let mySeq = seq
@@ -314,6 +386,11 @@ actor IAP2Link {
         for attempt in 1...max(1, retries) {
             try await transport.write(packet)
             if await waitFor(.acknowledged(mySeq), timeout: timeout) { return }
+            if wasReset { throw LinkError.reset }
+            // `close()` unblocks whatever is in flight rather than queueing
+            // behind it, so a retransmission here would be shouting at a link
+            // that is already being torn down.
+            if isClosing || end != nil { throw LinkError.notLinked }
             // Routine: the receiver piggybacks acknowledgements on its own
             // traffic, so an idle moment costs one retransmission.
             logger.debug("Link packet seq \(mySeq, privacy: .public) unacknowledged, attempt \(attempt, privacy: .public)/\(retries, privacy: .public)")
@@ -338,19 +415,27 @@ actor IAP2Link {
     private func isSatisfied(_ condition: WaitCondition) -> Bool {
         switch condition {
         case .syn: syn != nil
-        case .acknowledged(let wanted): theirAck == wanted
+        case .acknowledged(let wanted):
+            // Acknowledgements are cumulative and the sequence space wraps, so
+            // this is "at or beyond", not equality: an ack that jumped past our
+            // packet still acknowledges it, and insisting on the exact number
+            // is what made an idle receiver look like a dead one.
+            theirAck.map { $0 &- wanted < 128 } ?? false
         case .identified: isIdentified
         case .externalAccessoryStatus: externalAccessoryStatus != nil
         }
     }
 
+    /// A dead link satisfies nothing. This is checked before the condition so
+    /// that a reply landing in the same breath as an RST cannot "win" and let
+    /// the handshake carry on over a link the accessory has torn down.
     private func waitFor(_ condition: WaitCondition, timeout: Duration) async -> Bool {
-        if isSatisfied(condition) { return true }
         if wasReset { return false }
+        if isSatisfied(condition) { return true }
 
         let id = UUID()
-        let timer = Task { [weak self] in
-            try? await Task.sleep(for: timeout)
+        let timer = Task { [weak self, sleeper] in
+            try? await sleeper(timeout)
             await self?.expire(id)
         }
         defer { timer.cancel() }
@@ -365,7 +450,7 @@ actor IAP2Link {
 
     private func signalWaiters() {
         for (id, waiter) in waiters {
-            let met = isSatisfied(waiter.condition)
+            let met = !wasReset && isSatisfied(waiter.condition)
             guard met || wasReset else { continue }
             waiters.removeValue(forKey: id)
             waiter.continuation.resume(returning: met)

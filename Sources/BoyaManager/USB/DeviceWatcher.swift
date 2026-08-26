@@ -44,14 +44,16 @@ actor DeviceWatcher {
     }
 
     func stop() {
-        for iterator in iterators { IOObjectRelease(iterator) }
-        iterators = []
-        for context in contexts { context.release() }
-        contexts = []
+        // The port goes first. Releasing a callback's context while the port
+        // can still deliver to it hands IOKit a pointer to freed memory.
         if let notifyPort {
             IONotificationPortDestroy(notifyPort)
             self.notifyPort = nil
         }
+        for iterator in iterators { IOObjectRelease(iterator) }
+        iterators = []
+        for context in contexts { context.release() }
+        contexts = []
         continuation.finish()
     }
 

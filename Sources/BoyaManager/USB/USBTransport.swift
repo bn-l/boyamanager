@@ -22,6 +22,10 @@ actor USBTransport: ByteTransport {
     enum TransportError: Error, Sendable {
         case deviceNotFound
         case matchingFailed(kern_return_t)
+        /// The interface is published but would not open. `accessoryd` holds it
+        /// for about a second after plug-in to run MFi authentication, so this
+        /// is expected once per plug-in.
+        case claimFailed(IOReturn)
         case writeFailed(IOReturn)
         case closed
     }
@@ -36,8 +40,13 @@ actor USBTransport: ByteTransport {
     private let queue: DispatchQueue
     private let stream: AsyncStream<[UInt8]>
     private let continuation: AsyncStream<[UInt8]>.Continuation
+    private let terminated: TerminationFlag
     private var reader: BulkReader?
     private var isClosed = false
+
+    /// Whether the OS told us the interface went away, rather than the stream
+    /// having simply been closed from this side.
+    var wasTerminated: Bool { terminated.isSet }
 
     /// The IORegistry entry id of the interface we opened — logged either side
     /// of a session so an unexpected re-enumeration is obvious.
@@ -58,22 +67,35 @@ actor USBTransport: ByteTransport {
         self.stream = stream
         self.continuation = continuation
 
+        let terminated = TerminationFlag()
+        self.terminated = terminated
+
         logger.info("Opening iAP interface, registry id 0x\(String(entryID, radix: 16), privacy: .public)")
-        interface = try IOUSBHostInterface(
-            __ioService: service,
-            options: [],
-            queue: queue,
-            interestHandler: { _, messageType, _ in
-                logger.info("Interest message 0x\(String(messageType, radix: 16), privacy: .public)")
-                if messageType == serviceIsTerminated {
-                    logger.notice("Interface terminated — ending the inbound stream")
-                    continuation.finish()
+        // Everything IOUSBHost throws while setting the interface up means the
+        // same thing to the layer above — we did not get the interface — so it
+        // is reported as such rather than as a generic transport error.
+        do {
+            let interface = try IOUSBHostInterface(
+                __ioService: service,
+                options: [],
+                queue: queue,
+                interestHandler: { _, messageType, _ in
+                    logger.info("Interest message 0x\(String(messageType, radix: 16), privacy: .public)")
+                    if messageType == serviceIsTerminated {
+                        logger.notice("Interface terminated — ending the inbound stream")
+                        terminated.set()
+                        continuation.finish()
+                    }
                 }
-            }
-        )
-        inPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkInEndpoint)
-        outPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkOutEndpoint)
-        readBuffer = try interface.ioData(withCapacity: BoyaDevice.packetSize)
+            )
+            self.interface = interface
+            inPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkInEndpoint)
+            outPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkOutEndpoint)
+            readBuffer = try interface.ioData(withCapacity: BoyaDevice.packetSize)
+        } catch {
+            logger.error("Could not open the iAP interface: \(error.localizedDescription, privacy: .public)")
+            throw TransportError.claimFailed(IOReturn((error as NSError).code))
+        }
         logger.notice("iAP interface open (pipes 0x\(String(BoyaDevice.bulkOutEndpoint, radix: 16), privacy: .public)/0x\(String(BoyaDevice.bulkInEndpoint, radix: 16), privacy: .public))")
     }
 
@@ -86,6 +108,12 @@ actor USBTransport: ByteTransport {
         return stream
     }
 
+    /// One buffer per write, deliberately. `ioData(withCapacity:)` hands back
+    /// kernel memory whose length *is* the transfer length and which the SDK
+    /// documents as immutable — changing it throws — so a single reusable OUT
+    /// buffer would either pad every packet with trailing junk or need a pool
+    /// with in-flight bookkeeping. At roughly two writes a second the
+    /// allocation is not worth either.
     func write(_ bytes: [UInt8]) async throws {
         guard !isClosed else { throw TransportError.closed }
         logger.debug("-> \(bytes.hexString, privacy: .public)")
@@ -121,6 +149,11 @@ actor USBTransport: ByteTransport {
         // holds, and the final barrier lets those abort completions run. Only
         // then is it safe to tear the interface down — destroying it with
         // callbacks still in flight corrupts the heap.
+        //
+        // The two `queue.sync` calls here block a cooperative thread, which is
+        // normally a thing to avoid inside an actor. IOUSBHost gives no async
+        // way to know its completions have drained, and this runs once per
+        // session on the teardown path — never in a hot one.
         reader?.stop()
         reader = nil
         try? inPipe.__abort(with: .synchronous)
@@ -236,6 +269,17 @@ private final class BulkReader: @unchecked Sendable {
             continuation.finish()
         }
     }
+}
+
+/// Set from the interface's interest handler, which runs on the interface's
+/// dispatch queue, and read from the actor — so a lock rather than actor state.
+private final class TerminationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() { lock.withLock { value = true } }
 }
 
 /// Carries an `NSMutableData` across the concurrency boundary into an

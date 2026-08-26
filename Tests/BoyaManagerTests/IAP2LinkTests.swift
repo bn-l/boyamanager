@@ -348,19 +348,67 @@ struct IAP2LinkTests {
         #expect(stops == 1)
     }
 
-    @Test("An RST during identification surfaces instead of leaving the link half-open")
+    /// Identification lands a moment before the RST, and `waitFor` used to
+    /// check the condition before the reset flag — so identification "won",
+    /// `open` carried on, and the failure surfaced later as something else.
+    /// The old test asserted nothing on the throwing path, so it passed either
+    /// way.
+    @Test("An RST during identification surfaces as a reset, not as a half-open link")
     func reset() async {
         let accessory = FakeAccessory(options: .init(resetAfterIdentification: true))
         let link = IAP2Link(transport: accessory, initialSequence: 0x40)
 
-        // Identification still lands, but the reset must stop the session from
-        // being treated as usable.
-        let identity = try? await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
-        if identity != nil {
-            await #expect(throws: IAP2Link.LinkError.notLinked) {
-                try await link.sendEA(Fixtures.getAllRequest)
-            }
+        await #expect(throws: IAP2Link.LinkError.reset) {
+            try await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
         }
+
+        #expect(await link.end == .reset)
+        await #expect(throws: IAP2Link.LinkError.reset) {
+            try await link.sendEA(Fixtures.getAllRequest)
+        }
+        await link.close()
+    }
+
+    /// A faithful port of `scripts/iap2.py`, which discarded the wait result
+    /// and only threw on an explicit non-zero status. A timeout left the status
+    /// nil, the link logged "EA session open", and the real failure turned up
+    /// fifteen seconds later as "the receiver stopped answering".
+    @Test("A session the accessory never confirms fails instead of looking open")
+    func missingSessionStatus() async {
+        let accessory = FakeAccessory(options: .init(answersSessionStatus: false))
+        let link = IAP2Link(transport: accessory, initialSequence: 0x40)
+
+        await #expect(throws: IAP2Link.LinkError.noSessionStatus) {
+            try await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
+        }
+
+        let eaPackets = await accessory.hostPackets.filter { $0.session == 2 }
+        #expect(eaPackets.isEmpty, "nothing may be written into a session that was never confirmed")
+        await link.close()
+    }
+
+    @Test("A status about somebody else's session says nothing about ours")
+    func statusForAnotherSession() async {
+        let accessory = FakeAccessory(options: .init(statusSessionOverride: 7))
+        let link = IAP2Link(transport: accessory, initialSequence: 0x40)
+
+        await #expect(throws: IAP2Link.LinkError.noSessionStatus) {
+            try await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
+        }
+        await link.close()
+    }
+
+    /// Acknowledgements are cumulative and the sequence space wraps, so an ack
+    /// that jumped past our packet still acknowledges it. Matching on equality
+    /// left such a packet looking unacknowledged forever.
+    @Test("An acknowledgement that jumped past our packet still acknowledges it")
+    func cumulativeAcknowledgement() async throws {
+        let accessory = FakeAccessory(options: .init(acknowledgesAhead: 3))
+        let link = IAP2Link(transport: accessory, initialSequence: 0x40)
+
+        let identity = try await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
+
+        #expect(identity.serial == "CFD7387E79")
         await link.close()
     }
 }

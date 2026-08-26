@@ -52,6 +52,7 @@ struct BoyaManagerApp: App {
         } label: {
             Image(nsImage: Shared.controller.menuBarImage)
                 .accessibilityLabel(Shared.controller.state.tooltip)
+                .help(Shared.controller.state.tooltip)
         }
         .menuBarExtraStyle(.window)
 
@@ -137,12 +138,26 @@ final class AppController {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Injected so `AppDelegateTests` can drive the termination handshake
+    /// without quitting the test runner.
+    var shutdown: @MainActor () async -> Void = { await Shared.controller.stop() }
+    var replyToTermination: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
+    /// How long the quit path waits for the receiver to be told before giving
+    /// up on it. An app that will not quit is worse than an unclean session.
+    var terminationTimeout: Duration = .seconds(2)
+
+    /// Set when another instance is already running. That instance never opened
+    /// a session, so it has nothing to tell the receiver and must not make the
+    /// user wait while it finds that out.
+    var isDuplicateInstance = false
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
         let alreadyRunning = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
         if alreadyRunning {
             logger.notice("Another instance is already running — deferring to it and quitting")
+            isDuplicateInstance = true
             NSApp.terminate(nil)
         }
     }
@@ -153,15 +168,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Shared.controller.start()
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        // The receiver is told the session is over so it does not re-enumerate
-        // itself looking for the host again. Capped inside `close()`.
-        let done = DispatchSemaphore(value: 0)
+    /// The receiver has to be told the session is over or it re-enumerates
+    /// itself looking for the host again, and telling it takes a round trip.
+    ///
+    /// `.terminateLater` is the only way to get one. Blocking the main thread
+    /// on a semaphore parks the very thread that would run `stop()` — it is
+    /// MainActor work — so the wait always times out and the shutdown never
+    /// happens at all.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isDuplicateInstance else { return .terminateNow }
+        let timeout = terminationTimeout
         Task {
-            await Shared.controller.stop()
-            done.signal()
+            let quit = OneShot { [self] in replyToTermination(true) }
+            let watchdog = Task {
+                // `try?` alone swallows the cancellation and would log a
+                // timeout on every clean quit.
+                do { try await Task.sleep(for: timeout) } catch { return }
+                logger.error("Shutdown did not finish in \(timeout.milliseconds, privacy: .public)ms — quitting anyway")
+                quit.fire()
+            }
+            await shutdown()
+            watchdog.cancel()
+            quit.fire()
         }
-        _ = done.wait(timeout: .now() + 1.5)
+        return .terminateLater
+    }
+}
+
+/// Runs its body at most once. The shutdown and its watchdog race to end the
+/// termination handshake and AppKit must be answered exactly once.
+@MainActor
+private final class OneShot {
+    private var body: (() -> Void)?
+
+    init(_ body: @escaping () -> Void) { self.body = body }
+
+    func fire() {
+        body?()
+        body = nil
     }
 }
 

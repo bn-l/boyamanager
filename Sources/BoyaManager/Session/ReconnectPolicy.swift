@@ -13,6 +13,9 @@ enum FailureKind: Sendable, Equatable {
     case unresponsive
     /// RST from the accessory.
     case reset
+    /// The interface was terminated under us — the device was unplugged. Never
+    /// retried: there is nothing to retry against until it comes back.
+    case deviceRemoved
     case transport
 
     var summary: String {
@@ -23,6 +26,7 @@ enum FailureKind: Sendable, Equatable {
         case .sessionRefused: "the receiver refused the data session"
         case .unresponsive: "the receiver stopped answering"
         case .reset: "the receiver reset the link"
+        case .deviceRemoved: "the receiver was unplugged"
         case .transport: "the connection dropped"
         }
     }
@@ -34,8 +38,13 @@ enum ReconnectDecision: Sendable, Equatable {
 }
 
 /// The runaway-loop guard. Every failure path in `ReceiverSession` comes
-/// through here, and a successful `ready` resets the attempt count, so a device
-/// that connects fine can never accumulate its way into a give-up.
+/// through here. The attempt count is reset by the receiver *answering*
+/// something, not by the handshake completing — a receiver that connects
+/// perfectly and then says nothing would otherwise reset it every cycle and
+/// never give up.
+///
+/// Vocabulary: `maxAttempts` counts retries, so one plug-in event costs at most
+/// six connection attempts — the first, then five backed-off retries.
 struct ReconnectPolicy: Sendable, Equatable {
     /// How many retries one plug-in event is allowed before the app gives up
     /// and offers a manual "Retry".
