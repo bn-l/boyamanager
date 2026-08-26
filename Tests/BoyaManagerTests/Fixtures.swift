@@ -58,10 +58,11 @@ enum Fixtures {
     /// A device heartbeat, broadcast node, `src = 1`.
     static let deviceHeartbeat = bytes("55120d00285101021d0000000000000000a80000010ada0943010000240b")
 
-    /// A node handle the host never sends to of its own accord. The receiver
-    /// really beats from the broadcast handle `(0,0,0)` — observed in the live
-    /// log — which is indistinguishable from the host's own beats, so the
-    /// tests use a handle that can only have come back from a reply.
+    /// A node handle the host never sends to of its own accord, so a frame
+    /// carrying it can only have come back from a reply. The real receiver
+    /// beats from no fixed handle — `(0,0,0)` and `(2,1,29)` on consecutive
+    /// connections — and the broadcast one is indistinguishable from the host's
+    /// own beats, so neither is usable here.
     static let heartbeatingNode = CFDNode(chid: 2, vid: 2, pid: 30)
 
     /// The captured heartbeat, re-addressed from `heartbeatingNode`. A reply to

@@ -8,8 +8,11 @@ protocol ByteTransport: Sendable {
     func inbound() async -> AsyncStream<[UInt8]>
     func write(_ bytes: [UInt8]) async throws
     func close() async
-    /// True once the OS said the interface went away. Only the transport can
-    /// tell an unplug from an ordinary stream ending, and the difference is
-    /// whether the app should count a reconnect attempt or just wait.
+    /// True once the device has gone, as opposed to the stream having been
+    /// closed from this side. Only the transport can tell those apart, and the
+    /// difference is whether the app counts a reconnect attempt and shows a
+    /// countdown or simply waits for the device to come back.
+    ///
+    /// May answer "present" for a moment after a yank — see `USBTransport`.
     var wasTerminated: Bool { get async }
 }

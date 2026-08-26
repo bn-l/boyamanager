@@ -63,7 +63,19 @@ actor FakeAccessory: ByteTransport {
     private var isClosed = false
     private var isReset = false
     private var beatsBack: Bool
-    private(set) var wasTerminated = false
+    private var isUnplugged = false
+    /// How many more looks at `wasTerminated` still answer "present". The real
+    /// receiver's interest handler does not fire for a yank at all, and IOKit's
+    /// own removal lands tens of milliseconds after the read fails, so the
+    /// first look at the moment the stream ends can be wrong.
+    private var terminationLag = 0
+
+    var wasTerminated: Bool {
+        guard isUnplugged else { return false }
+        guard terminationLag > 0 else { return true }
+        terminationLag -= 1
+        return false
+    }
 
     /// Everything the host wrote, as parsed link packets — the transcript the
     /// no-SYN invariant is asserted over.
@@ -92,7 +104,7 @@ actor FakeAccessory: ByteTransport {
     /// Without that, every retry in a test failed at the claim and a session
     /// that reconnects endlessly looked bounded.
     func inbound() -> AsyncStream<[UInt8]> {
-        if let stream, !isClosed || wasTerminated { return stream }
+        if let stream, !isClosed || isUnplugged { return stream }
         let (stream, continuation) = AsyncStream.makeStream(of: [UInt8].self)
         self.stream = stream
         self.continuation = continuation
@@ -278,10 +290,12 @@ actor FakeAccessory: ByteTransport {
         isReset = true
     }
 
-    /// The device being pulled out: the interface is terminated under the
-    /// transport and the byte stream ends, with no orderly close.
-    func unplug() {
-        wasTerminated = true
+    /// The device being pulled out: the byte stream ends with no orderly close.
+    /// - Parameter lag: how many looks at `wasTerminated` still answer
+    ///   "present" before the truth arrives.
+    func unplug(lag: Int = 0) {
+        isUnplugged = true
+        terminationLag = lag
         isClosed = true
         continuation?.finish()
     }

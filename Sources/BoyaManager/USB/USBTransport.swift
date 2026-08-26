@@ -45,9 +45,26 @@ actor USBTransport: ByteTransport {
     private var reader: BulkReader?
     private var isClosed = false
 
-    /// Whether the OS told us the interface went away, rather than the stream
-    /// having simply been closed from this side.
-    var wasTerminated: Bool { terminated.isSet }
+    /// Whether the device has gone, rather than the stream having been closed
+    /// from this side.
+    ///
+    /// The interest handler is the documented signal and the cheap one, but on
+    /// this receiver it never fires for a yank: the bulk read simply fails and
+    /// the stream ends, with IOKit's own removal notification arriving tens of
+    /// milliseconds later. So the registry is asked as well — an interface that
+    /// is no longer published belongs to a device that is no longer there. It
+    /// can still lag the yank by a moment, which is why `IAP2Link` looks twice.
+    var wasTerminated: Bool {
+        terminated.isSet || !USBTransport.interfaceIsPublished
+    }
+
+    /// Whether the iAP interface is still in the IORegistry. Quiet about a
+    /// miss: on the teardown path a miss is the answer, not a failure.
+    private static var interfaceIsPublished: Bool {
+        guard let service = try? findInterfaceService(loggingMisses: false) else { return false }
+        IOObjectRelease(service)
+        return true
+    }
 
     /// The IORegistry entry id of the interface we opened — logged either side
     /// of a session so an unexpected re-enumeration is obvious.
@@ -179,7 +196,7 @@ actor USBTransport: ByteTransport {
     /// `createMatchingDictionary` match anything here, they just return an empty
     /// iterator. (`IOUSBHostDevice` *does* answer them, which is why
     /// `DeviceWatcher` gets away with the plain form.)
-    private static func findInterfaceService() throws -> io_service_t {
+    private static func findInterfaceService(loggingMisses: Bool = true) throws -> io_service_t {
         guard let matching = IOServiceMatching("IOUSBHostInterface") else {
             throw TransportError.deviceNotFound
         }
@@ -200,7 +217,9 @@ actor USBTransport: ByteTransport {
 
         let service = IOIteratorNext(iterator)
         guard service != IO_OBJECT_NULL else {
-            logger.error("No iAP interface found for \(String(format: "%04x:%04x", BoyaDevice.vendorID, BoyaDevice.productID), privacy: .public)")
+            if loggingMisses {
+                logger.error("No iAP interface found for \(String(format: "%04x:%04x", BoyaDevice.vendorID, BoyaDevice.productID), privacy: .public)")
+            }
             throw TransportError.deviceNotFound
         }
         return service

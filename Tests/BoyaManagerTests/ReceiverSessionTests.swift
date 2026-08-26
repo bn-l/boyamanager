@@ -396,6 +396,32 @@ struct ReceiverSessionTests {
         }
     }
 
+    /// Observed on the device: the IOUSBHost interest handler does not fire for
+    /// a yank at all. The bulk read fails, the stream ends, and IOKit's own
+    /// removal lands tens of milliseconds later — so a single look at the
+    /// moment the stream ends answers "still present" and the unplug is
+    /// announced as a dropped connection, complete with a retry countdown and
+    /// a burned attempt that then fails `deviceNotFound`.
+    @Test("An unplug the OS is slow to report is still an unplug")
+    func lateTerminationIsStillARemoval() async throws {
+        try await withHarness { harness, accessory in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            let before = await harness.recorder.states.count
+
+            await accessory.unplug(lag: 1)
+
+            #expect(await harness.recorder.wait { events in
+                events.contains { event in
+                    if case .state(.idle) = event { true } else { false }
+                }
+            })
+            let after = await harness.recorder.states.dropFirst(before)
+            #expect(!after.contains { if case .waitingToRetry = $0 { true } else { false } },
+                    "an unplug reported late is still an unplug: \(Array(after))")
+        }
+    }
+
     /// `LinkError.reset` had a diagnosis, a summary and a `FailureKind`, all of
     /// them unreachable: nothing ever threw it.
     @Test("An RST mid-session is diagnosed as a reset, not as a generic drop")

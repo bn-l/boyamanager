@@ -107,9 +107,11 @@ struct CFDNode: Hashable, Sendable {
     var pid: UInt16
 
     static let broadcast = Self(chid: 0, vid: 0, pid: 0)
-    /// The only node on a mini 2 that holds settings. It never heartbeats: the
-    /// receiver's own beats carry the broadcast handle `(0,0,0)`, so a reply is
-    /// told from a beat by the handle it is addressed to, not by src and dst.
+    /// The only node on a mini 2 that holds settings. It never heartbeats, and
+    /// the handle the receiver *does* beat from is not fixed — `(0,0,0)` and
+    /// `(2,1,29)` have both been seen on consecutive connections. So a reply is
+    /// addressed back to whatever beat at us rather than to a known node, and
+    /// nothing should assume which one that is.
     static let settings = Self(chid: 1, vid: 2, pid: 29)
 }
 
