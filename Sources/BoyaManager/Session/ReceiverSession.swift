@@ -298,8 +298,15 @@ actor ReceiverSession {
     // MARK: - device events
 
     /// Settles for `timings.deviceDebounce` before acting, so a removal
-    /// immediately followed by an arrival is one event rather than a reconnect
-    /// storm.
+    /// immediately followed by an arrival is one event rather than two.
+    ///
+    /// What it buys is narrower than it looks. The transport dies with the
+    /// interface, well before these debounced events arrive, so a receiver that
+    /// re-enumerates itself still loses its session and still reads as a
+    /// disconnection — including the notification. What the debounce prevents
+    /// is the `.idle` publish and a second connection attempt on top of it. The
+    /// only thing known to make the receiver re-enumerate is a host-originated
+    /// SYN, which this link never sends.
     private func deviceEvent(_ event: DeviceEvent) {
         logger.info("Device event: \(String(describing: event), privacy: .public)")
         debounceTask?.cancel()
@@ -621,10 +628,27 @@ actor ReceiverSession {
     func setRisky(_ attr: Attr, to value: UInt8) async {
         logger.notice("Risky write: \(attr.name, privacy: .public) = \(value, privacy: .public)")
         guard attr.isRisky else {
+            logger.info("\(attr.name, privacy: .public) is an ordinary setting — writing it as one")
             await write(attr, value)
             return
         }
         await perform(attr, value)
+    }
+
+    /// The two checks a setting and an action both have to pass: a value the
+    /// device will take, and a link to send it on. Publishes the refusal and
+    /// returns nil when either fails.
+    private func linkForWriting(_ attr: Attr, _ value: UInt8) -> (any AccessoryLink)? {
+        if let range = attr.range, !range.contains(value) {
+            logger.error("\(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\(range.upperBound, privacy: .public), refused \(value, privacy: .public)")
+            publish(.writeResult(attr, .failure(.outOfRange(value, range))))
+            return nil
+        }
+        guard state.isReady, let link = currentLink else {
+            publish(.writeResult(attr, .failure(.notReady)))
+            return nil
+        }
+        return link
     }
 
     /// Risky attributes are *actions*, not settings. `rx_speaker` restarts the
@@ -636,15 +660,7 @@ actor ReceiverSession {
     /// after is the action taking effect, not a failure, and the ordinary
     /// reconnect brings the receiver back.
     private func perform(_ attr: Attr, _ value: UInt8) async {
-        if let range = attr.range, !range.contains(value) {
-            logger.error("\(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\(range.upperBound, privacy: .public), refused \(value, privacy: .public)")
-            publish(.writeResult(attr, .failure(.outOfRange(value, range))))
-            return
-        }
-        guard state.isReady, let link = currentLink else {
-            publish(.writeResult(attr, .failure(.notReady)))
-            return
-        }
+        guard let link = linkForWriting(attr, value) else { return }
 
         guard let reply = try? await request(.setAttribute, payload: [attr.rawValue, 1, value], node: .settings, link: link) else {
             guard await link.end != nil else {
@@ -670,15 +686,7 @@ actor ReceiverSession {
     }
 
     private func write(_ attr: Attr, _ value: UInt8) async {
-        if let range = attr.range, !range.contains(value) {
-            logger.error("\(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\(range.upperBound, privacy: .public), refused \(value, privacy: .public)")
-            publish(.writeResult(attr, .failure(.outOfRange(value, range))))
-            return
-        }
-        guard state.isReady, let link = currentLink else {
-            publish(.writeResult(attr, .failure(.notReady)))
-            return
-        }
+        guard let link = linkForWriting(attr, value) else { return }
 
         logger.notice("Set \(attr.name, privacy: .public) = \(value, privacy: .public)")
         // Somebody is changing settings, so they are watching what happens.

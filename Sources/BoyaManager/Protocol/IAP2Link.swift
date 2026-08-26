@@ -216,6 +216,10 @@ actor IAP2Link {
     func close() async {
         guard !isClosing else { return }
         isClosing = true
+        // Whatever is already waiting for an acknowledgement is waiting on a
+        // link that is going away. Unblocking it here rather than leaving it to
+        // notice at its own next timeout is what makes the pre-emption real.
+        failAllWaiters()
         if isLinked, let session = sessionControl {
             let stop = ControlMessage(
                 id: .stopExternalAccessorySession,
@@ -248,6 +252,7 @@ actor IAP2Link {
             if await waitFor(.syn, timeout: .seconds(1)) { break }
         }
         guard let syn else {
+            if wasReset { throw LinkError.reset }
             logger.error("Accessory never sent an iAP2 link SYN")
             throw LinkError.noSYN
         }
@@ -271,6 +276,7 @@ actor IAP2Link {
                 logger.notice("iAP2 link up (control session \(self.sessionControl ?? 0, privacy: .public), EA session \(self.sessionExternalAccessory ?? 0, privacy: .public))")
                 return
             }
+            if wasReset { throw LinkError.reset }
             logger.info("SYN|ACK not acknowledged, attempt \(attempt, privacy: .public)/3")
         }
         throw LinkError.synAckNotAcknowledged

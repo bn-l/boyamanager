@@ -320,7 +320,10 @@ struct MicStateTests {
         #expect(state.pendingWrites.isEmpty)
 
         state.apply(.snapshot(snapshot()))
-        #expect(state.writeError == nil, "a good poll means the receiver is answering again")
+        #expect(state.writeError != nil, "a poll a second later must not wipe the only account of what went wrong")
+
+        state.apply(.writeResult(.rxGain, .success(4)))
+        #expect(state.writeError == nil, "a write that worked is the answer to one that did not")
     }
 
     @Test("A connection problem is not repeated under the controls — the status line says it")

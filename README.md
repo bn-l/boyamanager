@@ -12,16 +12,16 @@ iPhone uses.
 
 ## What it does
 
-* **Menu bar icon** — a hollow "B" that fills with up to four battery bars.
-  Red when the battery is low, dimmed with no transmitter, struck through when
-  the receiver is unplugged.
-* **Live status** — receiver battery and charge state, firmware, and per
-  transmitter: online, battery, signal and channel.
+* **Menu bar icon** — a hollow "B" that fills with up to four battery bars, red
+  on the last one, with a green dot per online transmitter. Dimmed with no
+  transmitter, struck through when the receiver is unplugged.
+* **Live status** — connection state, and per transmitter: online, battery,
+  signal, charging and channel. (The receiver itself is bus-powered, so it has
+  no battery to report.)
 * **Controls** — noise cancellation, output gain, scene mode, recording mode
   and mute, all bound to the value the device reads back rather than to an
   optimistic local one.
-* **Settings** — refresh rate, low-battery threshold, which transmitter the
-  icon follows, notifications, launch at login, and the device settings
+* **Settings** — notifications, launch at login, and the device settings
   (indicator lights, auto power off). Pairing, speaker mode and factory reset
   live behind confirmations in Advanced.
 * **Notifications** — low battery, a transmitter connecting or disconnecting,
@@ -75,7 +75,7 @@ just app          # build the app bundle
 just probe        # handshake with the receiver and dump every attribute
 just icons        # render the menu bar icon in every state to /tmp
 just log          # follow the app's log stream
-swift test        # 152 tests, no hardware needed
+swift test        # 161 tests, no hardware needed
 ```
 
 Command-line flags (`swift run BoyaManager --…`):

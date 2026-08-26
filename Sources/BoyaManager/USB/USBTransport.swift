@@ -2,6 +2,7 @@ import Foundation
 import IOKit
 import IOUSBHost
 import OSLog
+import Synchronization
 
 private let logger = Logger(subsystem: BoyaLog.subsystem, category: "USB")
 
@@ -273,13 +274,14 @@ private final class BulkReader: @unchecked Sendable {
 
 /// Set from the interface's interest handler, which runs on the interface's
 /// dispatch queue, and read from the actor — so a lock rather than actor state.
-private final class TerminationFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
+/// `Mutex` is non-copyable, hence the class around it; in exchange the whole
+/// thing is `Sendable` on its own terms rather than by assertion.
+private final class TerminationFlag: Sendable {
+    private let value = Mutex(false)
 
-    var isSet: Bool { lock.withLock { value } }
+    var isSet: Bool { value.withLock { $0 } }
 
-    func set() { lock.withLock { value = true } }
+    func set() { value.withLock { $0 = true } }
 }
 
 /// Carries an `NSMutableData` across the concurrency boundary into an

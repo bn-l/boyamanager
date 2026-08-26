@@ -32,6 +32,9 @@ final class MicState {
     private var lastKnownOnline: [Int: Bool] = [:]
     private var lastPresenceNotice: [Int: Date] = [:]
     private var wasEverReady = false
+    private var errorExpiry: Task<Void, Never>?
+    /// Long enough to read, short enough not to sit there after the fact.
+    private static let errorLifetime = Duration.seconds(8)
 
     init(preferences: Preferences, notifications: any NotificationCentre = SystemNotificationCentre()) {
         self.preferences = preferences
@@ -91,6 +94,7 @@ final class MicState {
             connection = state
             if state.isReady {
                 wasEverReady = true
+                errorExpiry?.cancel()
                 lastError = nil
             } else if wasReady {
                 // Leaving ready: everything on screen came from a receiver we
@@ -106,18 +110,31 @@ final class MicState {
         case .snapshot(let snapshot):
             self.snapshot = snapshot
             lastUpdate = Date()
-            lastError = nil
             checkTransmitterNotifications()
         case .writeResult(let attr, let result):
             pendingWrites.remove(attr)
             switch result {
             case .success(let value):
+                errorExpiry?.cancel()
                 lastError = nil
                 logger.info("Write confirmed \(attr.name, privacy: .public) = \(value, privacy: .public)")
             case .failure(let error):
-                lastError = Self.describe(error, attr: attr)
+                show(error: Self.describe(error, attr: attr))
                 logger.error("Write failed \(attr.name, privacy: .public): \(String(describing: error), privacy: .public)")
             }
+        }
+    }
+
+    /// A write error outlives the next poll. Clearing it on any snapshot gave
+    /// it a life of one poll interval — as little as a second — which is not
+    /// long enough to read a sentence that explains why nothing happened.
+    private func show(error message: String) {
+        lastError = message
+        errorExpiry?.cancel()
+        errorExpiry = Task { [weak self] in
+            try? await Task.sleep(for: Self.errorLifetime)
+            guard !Task.isCancelled else { return }
+            self?.lastError = nil
         }
     }
 
