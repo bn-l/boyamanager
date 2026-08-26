@@ -18,7 +18,7 @@ import Foundation
 ///     11     vid                 ├ node handle — which logical device on the bus
 ///     12..14 u16 pid             ┘
 ///     14..16 u16 message id
-///     16..   payload
+///     16.. payload
 ///     last   checksum = sum of every preceding byte & 0xFF
 ///
 /// See `docs/PROTOCOL.md` §4. Everything here is a pure function on bytes.
@@ -41,12 +41,12 @@ enum CFDLink {
     /// Builds a frame, checksum included.
     static func encode(
         message: CFDMessage,
+        seq: UInt16,
         payload: [UInt8] = [],
         node: CFDNode = .broadcast,
-        seq: UInt16,
         src: UInt8 = hostNode,
         dst: UInt8 = deviceNode,
-        service: UInt16 = CFDLink.service,
+        service: UInt16 = Self.service,
         flags: UInt8 = 0
     ) -> [UInt8] {
         var frame: [UInt8] = [sync, version | flags]
@@ -106,11 +106,11 @@ struct CFDNode: Hashable, Sendable {
     var vid: UInt8
     var pid: UInt16
 
-    static let broadcast = CFDNode(chid: 0, vid: 0, pid: 0)
+    static let broadcast = Self(chid: 0, vid: 0, pid: 0)
     /// The only node on a mini 2 that holds settings. It never heartbeats: the
     /// receiver's own beats carry the broadcast handle `(0,0,0)`, so a reply is
     /// told from a beat by the handle it is addressed to, not by src and dst.
-    static let settings = CFDNode(chid: 1, vid: 2, pid: 29)
+    static let settings = Self(chid: 1, vid: 2, pid: 29)
 }
 
 struct CFDFrame: Sendable, Equatable {

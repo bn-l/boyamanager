@@ -53,7 +53,7 @@ struct ReconnectPolicy: Sendable, Equatable {
 
     /// - Parameter attempt: how many failures have happened this plug-in event,
     ///   1 for the first.
-    func decide(attempt: Int, failure: FailureKind) -> ReconnectDecision {
+    func decide(attempt: Int, failure _: FailureKind) -> ReconnectDecision {
         guard attempt >= 1 else { return .retry(after: backoff.first ?? .seconds(1)) }
         guard attempt <= maxAttempts, !backoff.isEmpty else { return .giveUp }
         return .retry(after: backoff[min(attempt - 1, backoff.count - 1)])

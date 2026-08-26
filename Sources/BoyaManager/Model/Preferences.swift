@@ -97,6 +97,7 @@ enum LoginItemState: Sendable, Equatable {
 @MainActor
 protocol LoginItemStore {
     var state: LoginItemState { get }
+
     func register() throws
     func unregister() throws
     func openSettings()

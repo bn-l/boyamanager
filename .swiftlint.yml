@@ -65,6 +65,36 @@ disabled_rules:
   # code testable without a device.
   - discouraged_default_parameter
 
+  # Optionality carries meaning in the protocol layer. A nil `labels` is "this
+  # attribute is not an enumeration", a nil `flag` is "the device did not
+  # report it", and a nil subscript is the same. An empty collection or a
+  # `false` would each say something the device did not.
+  - discouraged_optional_collection
+  - discouraged_optional_boolean
+
+  # `String(decoding:as: UTF8.self)` is deliberate: iAP2 strings are UTF-8 and
+  # one bad byte should degrade a field, not turn the whole identity into nil.
+  - optional_data_string_conversion
+
+  # IOUSBHost takes and returns `NSMutableData`, and its buffers are kernel
+  # memory. There is no value type to prefer.
+  - legacy_objc_type
+
+  # Analyzer rules (`just lint-analyze`). These three are off for reasons of
+  # their own:
+  #
+  # `explicit_self` is the exact opposite of `redundant_self`, which is on.
+  # Only one of the pair can be, and `self.` on every member is not how Swift
+  # is written — the compiler already requires it where it disambiguates.
+  #
+  # The other two are analysed against the *app* target's compiler log, so
+  # anything only the tests use looks unreferenced and anything only the tests
+  # import looks unused. Both flag `OSLog`, which every file in the app logs
+  # through.
+  - explicit_self
+  - unused_declaration
+  - unused_import
+
 line_length:
   warning: 150
   error: 200
@@ -72,14 +102,27 @@ line_length:
   ignores_urls: true
 
 identifier_name:
-  # `id` and `to` are the names these things have in the protocol and in AppKit.
+  # `id` and `to` are the names these things have in the protocol and in
+  # AppKit; `x` and `y` are what a coordinate is called.
   allowed_symbols: ["_"]
   min_length: 2
-  excluded: [id, to, on, up]
+  excluded: [id, to, on, up, x, y]
+
+type_name:
+  # `ControlMessage.ID`, spelled the way Foundation spells it.
+  min_length: 2
+
+no_empty_block:
+  # An empty `init() {}` is how a struct keeps its memberwise initializer
+  # private, and `queue.sync {}` is a barrier whose whole point is to do
+  # nothing. Both are statements about intent.
+  disabled_block_types: [initializer_bodies, closure_blocks]
 
 type_body_length:
-  warning: 400
-  error: 600
+  # `ReceiverSession` is one state machine — the lifecycle, three loops and the
+  # request path share invariants that splitting them would spread out.
+  warning: 500
+  error: 700
 
 file_length:
   warning: 700
@@ -101,8 +144,8 @@ large_tuple:
 trailing_comma:
   mandatory_comma: true
 
-force_unwrapping:
-  # Tests unwrap fixtures and scratch defaults that are wrong if they are nil,
-  # and a crash there is the loudest possible failure.
-  excluded:
-    - Tests
+closure_body_length:
+  # SwiftUI bodies and the badge's draw handler are single expressions that
+  # happen to be long; breaking them up moves code away from what it draws.
+  warning: 60
+  error: 100

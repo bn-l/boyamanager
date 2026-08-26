@@ -12,9 +12,11 @@ protocol AccessoryLink: Sendable {
     /// Best-effort: a heartbeat that goes unacknowledged is not worth holding
     /// the link for, because another one follows in 500 ms.
     func sendHeartbeatEA(_ bytes: [UInt8]) async throws
+
     var eaInbound: AsyncStream<[UInt8]> { get }
     /// Why the link stopped, once it has. Nil while it is alive.
     var end: LinkEnd? { get async }
+
     func close() async
 }
 
@@ -45,6 +47,63 @@ enum SessionEvent: Sendable {
     case writeResult(Attr, Result<UInt8, SessionError>)
 }
 
+/// Every delay the session takes, in one place. All of them go through
+/// `sleeper`, so a test can drive the whole state machine — backoff
+/// included — on a compressed clock without a single real-time wait.
+struct SessionTimings: Sendable {
+    /// The device ignores queries issued too soon after the session opens:
+    /// at 1 s they go unanswered, at 1.5–2 s they work.
+    var warmUp: Duration = .seconds(1)
+    var heartbeat: Duration = .milliseconds(500)
+    /// Generous on purpose. The receiver acknowledges lazily — it often
+    /// piggybacks the acknowledgement on its next heartbeat rather than
+    /// answering within its advertised 255 ms — so a link packet can sit
+    /// for a second before the retransmission shakes an answer loose, and
+    /// that second is spent before this request's frame even goes out.
+    /// Measured round trips are 2–5 ms; this covers the stall, not the
+    /// device.
+    var request: Duration = .seconds(3)
+    /// A `removed` immediately followed by an `arrived` is the receiver
+    /// re-enumerating itself, not two events.
+    var deviceDebounce: Duration = .seconds(1)
+    var warmUpTick: Duration = .milliseconds(100)
+    /// Polling cadence. Fast while someone is looking at the popover or has
+    /// just changed something, slow the rest of the time. The data is 0…4
+    /// bar levels and `tx*_online` takes the device three seconds to update
+    /// anyway, so a second is as fine-grained as it is ever worth being.
+    var fastPoll: Duration = .seconds(1)
+    var idlePoll: Duration = .seconds(10)
+    /// How long a write keeps the fast cadence.
+    var attentionSpan: Duration = .seconds(5)
+    /// The device beats about every 500 ms. Silence for this long is a dead
+    /// link, and it says so seconds before three poll timeouts would —
+    /// without tying how fresh the data is to how fast a failure is noticed.
+    var heartbeatTimeout: Duration = .seconds(3)
+}
+
+    /// A request in flight. It is registered *before* the frame goes out,
+/// because the receiver can answer faster than the link acknowledges the
+/// packet that asked — a reply that lands before the caller starts waiting
+/// is parked in `received` rather than dropped.
+private struct PendingRequest {
+    /// Its own timer names it, so a timer left over from a request that has
+    /// already been answered cannot expire the one after it.
+    let id: UInt64
+    let message: UInt16
+    let attribute: UInt8?
+    var continuation: CheckedContinuation<CFDFrame?, Never>?
+    var received: CFDFrame?
+    var isExpired = false
+
+    func matches(_ frame: CFDFrame) -> Bool {
+        guard frame.message == message else { return false }
+        guard let attribute else { return true }
+        // Attribute replies are [status, id, len, value…]; a status-1 reply
+        // still names the attribute it is about.
+        return frame.payload.count >= 2 && frame.payload[1] == attribute
+    }
+}
+
 /// Owns the whole lifecycle: open the interface, bring the iAP2 link up,
 /// identify, open the External Accessory session, then keep three loops running
 /// — answer heartbeats, poll every attribute, and serve requests — until the
@@ -52,46 +111,13 @@ enum SessionEvent: Sendable {
 actor ReceiverSession {
     typealias LinkFactory = @Sendable () async throws -> any AccessoryLink
     typealias Sleeper = @Sendable (Duration) async throws -> Void
+    typealias Timings = SessionTimings
 
     private let makeLink: LinkFactory
     private let deviceEvents: AsyncStream<DeviceEvent>
     private let policy: ReconnectPolicy
     private let sleeper: Sleeper
     private let timings: Timings
-
-    /// Every delay the session takes, in one place. All of them go through
-    /// `sleeper`, so a test can drive the whole state machine — backoff
-    /// included — on a compressed clock without a single real-time wait.
-    struct Timings: Sendable {
-        /// The device ignores queries issued too soon after the session opens:
-        /// at 1 s they go unanswered, at 1.5–2 s they work.
-        var warmUp: Duration = .seconds(1)
-        var heartbeat: Duration = .milliseconds(500)
-        /// Generous on purpose. The receiver acknowledges lazily — it often
-        /// piggybacks the acknowledgement on its next heartbeat rather than
-        /// answering within its advertised 255 ms — so a link packet can sit
-        /// for a second before the retransmission shakes an answer loose, and
-        /// that second is spent before this request's frame even goes out.
-        /// Measured round trips are 2–5 ms; this covers the stall, not the
-        /// device.
-        var request: Duration = .seconds(3)
-        /// A `removed` immediately followed by an `arrived` is the receiver
-        /// re-enumerating itself, not two events.
-        var deviceDebounce: Duration = .seconds(1)
-        var warmUpTick: Duration = .milliseconds(100)
-        /// Polling cadence. Fast while someone is looking at the popover or has
-        /// just changed something, slow the rest of the time. The data is 0…4
-        /// bar levels and `tx*_online` takes the device three seconds to update
-        /// anyway, so a second is as fine-grained as it is ever worth being.
-        var fastPoll: Duration = .seconds(1)
-        var idlePoll: Duration = .seconds(10)
-        /// How long a write keeps the fast cadence.
-        var attentionSpan: Duration = .seconds(5)
-        /// The device beats about every 500 ms. Silence for this long is a dead
-        /// link, and it says so seconds before three poll timeouts would —
-        /// without tying how fresh the data is to how fast a failure is noticed.
-        var heartbeatTimeout: Duration = .seconds(3)
-    }
 
     private let eventStream: AsyncStream<SessionEvent>
     private let eventContinuation: AsyncStream<SessionEvent>.Continuation
@@ -118,29 +144,6 @@ actor ReceiverSession {
     private var isRequesting = false
     private var requestLockWaiters: [CheckedContinuation<Void, Never>] = []
     private var debounceTask: Task<Void, Never>?
-
-    /// A request in flight. It is registered *before* the frame goes out,
-    /// because the receiver can answer faster than the link acknowledges the
-    /// packet that asked — a reply that lands before the caller starts waiting
-    /// is parked in `received` rather than dropped.
-    private struct PendingRequest {
-        /// Its own timer names it, so a timer left over from a request that has
-        /// already been answered cannot expire the one after it.
-        let id: UInt64
-        let message: UInt16
-        let attribute: UInt8?
-        var continuation: CheckedContinuation<CFDFrame?, Never>?
-        var received: CFDFrame?
-        var isExpired = false
-
-        func matches(_ frame: CFDFrame) -> Bool {
-            guard frame.message == message else { return false }
-            guard let attribute else { return true }
-            // Attribute replies are [status, id, len, value…]; a status-1 reply
-            // still names the attribute it is about.
-            return frame.payload.count >= 2 && frame.payload[1] == attribute
-        }
-    }
 
     init(
         makeLink: @escaping LinkFactory,
@@ -175,8 +178,8 @@ actor ReceiverSession {
     func run() async {
         let watcher = Task { [weak self] in
             guard let self else { return }
-            for await event in self.deviceEvents {
-                await self.deviceEvent(event)
+            for await event in deviceEvents {
+                await deviceEvent(event)
             }
         }
         defer { watcher.cancel() }
@@ -193,9 +196,10 @@ actor ReceiverSession {
             var failure: FailureKind?
             var link: (any AccessoryLink)?
             do {
-                link = try await makeLink()
-                currentLink = link
-                let identity = try await link!.open(
+                let opened = try await makeLink()
+                link = opened
+                currentLink = opened
+                let identity = try await opened.open(
                     protocolName: BoyaDevice.externalAccessoryProtocol,
                     sessionID: 1,
                     timeout: .seconds(6)
@@ -203,11 +207,16 @@ actor ReceiverSession {
                 publish(.identified(identity))
                 resetForNewSession()
                 publish(.state(.ready))
-                logger.notice("Ready — \(identity.model ?? "receiver", privacy: .public) serial \(identity.serial ?? "?", privacy: .public)")
-                failure = await runReady(link: link!)
+                logger.notice(
+                    "Ready — \(identity.model ?? "receiver", privacy: .public) serial \(identity.serial ?? "?", privacy: .public)"
+                )
+                failure = await runReady(link: opened)
             } catch {
-                failure = Self.classify(error)
-                logger.error("Connect failed: \(String(describing: error), privacy: .public) → \(String(describing: failure!), privacy: .public)")
+                let kind = Self.classify(error)
+                failure = kind
+                logger.error(
+                    "Connect failed: \(String(describing: error), privacy: .public) → \(String(describing: kind), privacy: .public)"
+                )
             }
 
             // Cleared before the close, not after: a write that arrives while
@@ -229,24 +238,35 @@ actor ReceiverSession {
                 continue
             }
 
-            // `attempt` counts consecutive failures. Only a receiver that has
-            // actually answered something resets it — see `pollLoop`.
-            attempt += 1
-            switch policy.decide(attempt: attempt, failure: failure) {
-            case .retry(let delay):
-                let seconds = Int(delay.components.seconds)
-                logger.notice("\(failure.summary, privacy: .public) — retry \(self.attempt, privacy: .public) of \(self.policy.maxAttempts, privacy: .public) in \(seconds, privacy: .public)s")
-                publish(.state(.waitingToRetry(reason: failure, attempt: attempt, seconds: seconds)))
-                try? await sleeper(delay)
-            case .giveUp:
-                logger.error("Giving up after \(self.attempt, privacy: .public) connection attempts (\(self.policy.maxAttempts, privacy: .public) retries): \(failure.summary, privacy: .public)")
-                hasGivenUp = true
-                publish(.state(.failed(failure)))
-            }
+            await backOff(from: failure)
         }
 
         logger.notice("Session stopped")
         eventContinuation.finish()
+    }
+
+    /// One turn of the reconnect policy. `attempt` counts consecutive
+    /// failures; only a receiver that has actually answered something resets it
+    /// — see `pollLoop`.
+    private func backOff(from failure: FailureKind) async {
+        attempt += 1
+        switch policy.decide(attempt: attempt, failure: failure) {
+        case .retry(let delay):
+            let seconds = Int(delay.components.seconds)
+            logger.notice("""
+                \(failure.summary, privacy: .public) — retry \(self.attempt, privacy: .public) \
+                of \(self.policy.maxAttempts, privacy: .public) in \(seconds, privacy: .public)s
+                """)
+            publish(.state(.waitingToRetry(reason: failure, attempt: attempt, seconds: seconds)))
+            try? await sleeper(delay)
+        case .giveUp:
+            logger.error("""
+                Giving up after \(self.attempt, privacy: .public) connection attempts \
+                (\(self.policy.maxAttempts, privacy: .public) retries): \(failure.summary, privacy: .public)
+                """)
+            hasGivenUp = true
+            publish(.state(.failed(failure)))
+        }
     }
 
     /// Manual "Retry" from the popover after the policy gave up.
@@ -267,23 +287,6 @@ actor ReceiverSession {
             logger.notice("Recheck got no answer — dropping the link so it can be rebuilt")
             await link.close()
         }
-    }
-
-    /// The popover appearing is the strongest signal that somebody wants
-    /// current numbers, and its disappearing that nobody does.
-    func setPopoverVisible(_ visible: Bool) async {
-        isPopoverVisible = visible
-        logger.info("Popover \(visible ? "open" : "closed", privacy: .public) — polling every \(self.pollInterval.milliseconds, privacy: .public)ms")
-        guard visible else { return }
-        await pollNow()
-    }
-
-    func setDisplayAsleep(_ asleep: Bool) async {
-        guard asleep != isDisplayAsleep else { return }
-        isDisplayAsleep = asleep
-        logger.info("Display \(asleep ? "asleep — polling paused" : "awake", privacy: .public)")
-        guard !asleep else { return }
-        await pollNow()
     }
 
     func shutdown() async {
@@ -343,7 +346,9 @@ actor ReceiverSession {
             group.addTask { await self.heartbeatLoop(link: link) }
             group.addTask { await self.heartbeatWatchdog() }
             group.addTask { await self.pollLoop(link: link) }
-            let first = await group.next() ?? nil
+            // `next()` gives `FailureKind??`: the outer optional says whether a
+            // child finished at all, the inner one whether it failed.
+            let first = await group.next().flatMap(\.self)
             group.cancelAll()
             return first
         }
@@ -414,15 +419,18 @@ actor ReceiverSession {
 
         if frame.isHeartbeat {
             if !answeredDeviceHeartbeat {
-                logger.info("First device heartbeat from node (\(frame.node.chid, privacy: .public),\(frame.node.vid, privacy: .public),\(frame.node.pid, privacy: .public))")
+                logger.info("""
+                    First device heartbeat from node (\(frame.node.chid, privacy: .public),\
+                    \(frame.node.vid, privacy: .public),\(frame.node.pid, privacy: .public))
+                    """)
             }
             answeredDeviceHeartbeat = true
             deviceHeartbeats += 1
             let reply = CFDLink.encode(
                 message: .heartbeat,
+                seq: nextSeq(),
                 payload: CFDLink.heartbeatPayload(tick: tick()),
                 node: frame.node,
-                seq: nextSeq(),
                 src: frame.dst,
                 dst: frame.src,
                 service: frame.service
@@ -447,8 +455,8 @@ actor ReceiverSession {
             do {
                 try await link.sendHeartbeatEA(CFDLink.encode(
                     message: .heartbeat,
-                    payload: CFDLink.heartbeatPayload(tick: tick()),
-                    seq: nextSeq()
+                    seq: nextSeq(),
+                    payload: CFDLink.heartbeatPayload(tick: tick())
                 ))
             } catch {
                 logger.error("Heartbeat failed: \(String(describing: error), privacy: .public)")
@@ -536,7 +544,7 @@ actor ReceiverSession {
         defer { releaseRequestLock() }
 
         let attribute: UInt8? = (message == .getAttribute || message == .setAttribute) ? payload.first : nil
-        let frame = CFDLink.encode(message: message, payload: payload, node: node, seq: nextSeq())
+        let frame = CFDLink.encode(message: message, seq: nextSeq(), payload: payload, node: node)
         cfdLogger.debug("-> msg 0x\(String(message.rawValue, radix: 16), privacy: .public) \(payload.hexString, privacy: .public)")
 
         nextRequestID += 1
@@ -610,8 +618,69 @@ actor ReceiverSession {
         if !requestLockWaiters.isEmpty { requestLockWaiters.removeFirst().resume() }
     }
 
-    // MARK: - writes
+    // MARK: - plumbing
 
+    /// The only way `state` changes. Publishing and recording used to be two
+    /// steps, and they drifted: `state` was never set to `.connecting` at all,
+    /// and stayed `.ready` right through the link being torn down.
+    private func publish(_ event: SessionEvent) {
+        if case .state(let new) = event { state = new }
+        eventContinuation.yield(event)
+    }
+
+    private func nextSeq() -> UInt16 {
+        seq = seq &+ 1
+        return seq
+    }
+
+    /// Host uptime in milliseconds. `components.seconds * 1000` quantises this
+    /// to a second, so consecutive beats 500 ms apart carried the same value —
+    /// the exact mistake `Duration.milliseconds` exists to prevent.
+    private func tick() -> UInt32 {
+        UInt32(truncatingIfNeeded: (ContinuousClock.now - startInstant).milliseconds)
+    }
+
+    private func waitForResume() async {
+        await withCheckedContinuation { resumeWaiters.append($0) }
+    }
+
+    private func signalResume() {
+        let waiting = resumeWaiters
+        resumeWaiters = []
+        for waiter in waiting { waiter.resume() }
+    }
+
+    /// Which diagnosis the user and the log get. Internal so the mapping can be
+    /// tested — it used to call a failed bulk write an exclusive-access
+    /// problem, which sends anyone reading the log after the wrong thing.
+    static func classify(_ error: any Error) -> FailureKind {
+        switch error {
+        case let link as IAP2Link.LinkError:
+            switch link {
+            case .noSYN: .noSYN
+            case .noIdentification, .noProtocols, .protocolNotOffered: .noIdentification
+            case .externalAccessoryRefused, .noSessions, .noSessionStatus, .synAckNotAcknowledged: .sessionRefused
+            case .reset: .reset
+            case .notLinked, .notAcknowledged: .transport
+            }
+        case let transport as USBTransport.TransportError:
+            switch transport {
+            // Nothing to open, or it would not open for us.
+            case .deviceNotFound, .matchingFailed, .claimFailed: .claimFailed
+            // Mid-session: the interface was ours and stopped working.
+            case .writeFailed, .closed: .transport
+            }
+        default:
+            .transport
+        }
+    }
+}
+
+/// Changing something on the receiver. Ordinary settings are written and
+/// read back; the three attributes with side effects are actions, and are
+/// answered by the reply to the command rather than by a read-back that the
+/// receiver will not be around to give.
+extension ReceiverSession {
     /// Writes an ordinary setting, then reads it back. The read-back is what
     /// gets published — the UI never shows an optimistic value.
     func set(_ attr: Attr, to value: UInt8) async {
@@ -640,7 +709,10 @@ actor ReceiverSession {
     /// returns nil when either fails.
     private func linkForWriting(_ attr: Attr, _ value: UInt8) -> (any AccessoryLink)? {
         if let range = attr.range, !range.contains(value) {
-            logger.error("\(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\(range.upperBound, privacy: .public), refused \(value, privacy: .public)")
+            logger.error("""
+                \(attr.name, privacy: .public) takes \(range.lowerBound, privacy: .public)…\
+                \(range.upperBound, privacy: .public), refused \(value, privacy: .public)
+                """)
             publish(.writeResult(attr, .failure(.outOfRange(value, range))))
             return nil
         }
@@ -709,7 +781,33 @@ actor ReceiverSession {
         publish(.writeResult(attr, .success(confirmed)))
         publish(.snapshot(snapshot))
     }
+}
 
+/// What the app knows about whether anyone is looking. The session polls
+/// quickly while they are and barely at all while they are not.
+extension ReceiverSession {
+    /// The popover appearing is the strongest signal that somebody wants
+    /// current numbers, and its disappearing that nobody does.
+    func setPopoverVisible(_ visible: Bool) async {
+        isPopoverVisible = visible
+        logger.info("Popover \(visible ? "open" : "closed", privacy: .public) — polling every \(self.pollInterval.milliseconds, privacy: .public)ms")
+        guard visible else { return }
+        await pollNow()
+    }
+
+    func setDisplayAsleep(_ asleep: Bool) async {
+        guard asleep != isDisplayAsleep else { return }
+        isDisplayAsleep = asleep
+        logger.info("Display \(asleep ? "asleep — polling paused" : "awake", privacy: .public)")
+        guard !asleep else { return }
+        await pollNow()
+    }
+}
+
+/// The diagnostic surface: single reads that carry the status byte, and a
+/// dump outside the poll loop. `--probe` and `HardwareTests` use these; the
+/// app itself never does.
+extension ReceiverSession {
     /// Reads one attribute directly. Unlike a poll this carries the status
     /// byte, which is the only way to tell "not available right now" from
     /// "this model does not have it".
@@ -731,63 +829,6 @@ actor ReceiverSession {
         guard let reply = try? await request(.getMany, payload: [0], node: .settings, link: link) else { return nil }
         return AttributeSnapshot(decoding: reply.payload)
     }
-
-    // MARK: - plumbing
-
-    /// The only way `state` changes. Publishing and recording used to be two
-    /// steps, and they drifted: `state` was never set to `.connecting` at all,
-    /// and stayed `.ready` right through the link being torn down.
-    private func publish(_ event: SessionEvent) {
-        if case .state(let new) = event { state = new }
-        eventContinuation.yield(event)
-    }
-
-    private func nextSeq() -> UInt16 {
-        seq = seq &+ 1
-        return seq
-    }
-
-    /// Host uptime in milliseconds. `components.seconds * 1000` quantises this
-    /// to a second, so consecutive beats 500 ms apart carried the same value —
-    /// the exact mistake `Duration.milliseconds` exists to prevent.
-    private func tick() -> UInt32 {
-        UInt32(truncatingIfNeeded: (ContinuousClock.now - startInstant).milliseconds)
-    }
-
-    private func waitForResume() async {
-        await withCheckedContinuation { resumeWaiters.append($0) }
-    }
-
-    private func signalResume() {
-        let waiting = resumeWaiters
-        resumeWaiters = []
-        for waiter in waiting { waiter.resume() }
-    }
-
-    /// Which diagnosis the user and the log get. Internal so the mapping can be
-    /// tested — it used to call a failed bulk write an exclusive-access
-    /// problem, which sends anyone reading the log after the wrong thing.
-    static func classify(_ error: any Error) -> FailureKind {
-        switch error {
-        case let link as IAP2Link.LinkError:
-            switch link {
-            case .noSYN: .noSYN
-            case .noIdentification, .noProtocols, .protocolNotOffered: .noIdentification
-            case .externalAccessoryRefused, .noSessions, .noSessionStatus, .synAckNotAcknowledged: .sessionRefused
-            case .reset: .reset
-            case .notLinked, .notAcknowledged: .transport
-            }
-        case let transport as USBTransport.TransportError:
-            switch transport {
-            // Nothing to open, or it would not open for us.
-            case .deviceNotFound, .matchingFailed, .claimFailed: .claimFailed
-            // Mid-session: the interface was ours and stopped working.
-            case .writeFailed, .closed: .transport
-            }
-        default:
-            .transport
-        }
-    }
 }
 
 extension Duration {
@@ -795,6 +836,6 @@ extension Duration {
     /// attoseconds, so reading the attosecond part alone silently drops
     /// everything past a second — which logged a 1068 ms round trip as 68 ms.
     var milliseconds: Int {
-        Int(components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000)
+        Int(components.seconds * 1_000 + components.attoseconds / 1_000_000_000_000_000)
     }
 }

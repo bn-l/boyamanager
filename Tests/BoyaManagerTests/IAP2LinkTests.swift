@@ -1,13 +1,16 @@
+@testable import BoyaManager
 import Foundation
 import Testing
-@testable import BoyaManager
 
 @Suite("iAP2 link packets")
 struct LinkPacketTests {
     @Test("Encoding our SYN|ACK reproduces the captured bytes")
     func synAckMatchesCapture() {
         let packet = LinkPacket(
-            control: [.syn, .ack], seq: 0x40, ack: 0x01, session: 0,
+            control: [.syn, .ack],
+            seq: 0x40,
+            ack: 0x01,
+            session: 0,
             payload: Fixtures.receiverSYNPayload
         )
 
@@ -47,8 +50,8 @@ struct LinkPacketTests {
 
         let sessions = LinkPacket.sessions(inSYNPayload: packet.payload)
         #expect(sessions.count == 2)
-        #expect(sessions.first(where: { $0.type == 0 })?.id == 1)
-        #expect(sessions.first(where: { $0.type == 2 })?.id == 2)
+        #expect(sessions.first { $0.type == 0 }?.id == 1)
+        #expect(sessions.first { $0.type == 2 }?.id == 2)
     }
 
     @Test("A SYN split mid-packet is buffered until the rest arrives")

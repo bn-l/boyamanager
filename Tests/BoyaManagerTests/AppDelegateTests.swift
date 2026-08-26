@@ -1,7 +1,7 @@
 import AppKit
+@testable import BoyaManager
 import Foundation
 import Testing
-@testable import BoyaManager
 
 /// The quit path. It used to block the main thread on a semaphore while the
 /// work it waited for was MainActor-isolated, so the shutdown never ran, the
@@ -11,9 +11,9 @@ import Testing
 @MainActor
 struct AppDelegateTests {
     @Test("Quitting tells the receiver the session is over before the app exits")
-    func terminationRunsTheShutdown() async throws {
+    func terminationRunsTheShutdown() async {
         let accessory = FakeAccessory()
-        let harness = await SessionHarness(makeLink: { IAP2Link(transport: accessory, initialSequence: 0x40) })
+        let harness = await SessionHarness { IAP2Link(transport: accessory, initialSequence: 0x40) }
         harness.send(.arrived)
         #expect(await harness.recorder.wait { $0.contains { if case .state(.ready) = $0 { true } else { false } } })
         let delegate = AppDelegate()
@@ -32,7 +32,7 @@ struct AppDelegateTests {
     }
 
     @Test("A second instance quits at once rather than waiting on a session it never opened")
-    func duplicateInstanceQuitsAtOnce() async throws {
+    func duplicateInstanceQuitsAtOnce() async {
         let delegate = AppDelegate()
         let ran = Reply()
         delegate.isDuplicateInstance = true
@@ -41,11 +41,11 @@ struct AppDelegateTests {
         let decision = delegate.applicationShouldTerminate(NSApplication.shared)
 
         #expect(decision == .terminateNow)
-        #expect(await ran.count == 0, "a duplicate instance has no session to shut down")
+        #expect(await ran.answers == 0, "a duplicate instance has no session to shut down")
     }
 
     @Test("A shutdown that wedges still lets the app quit")
-    func wedgedShutdownStillQuits() async throws {
+    func wedgedShutdownStillQuits() async {
         let delegate = AppDelegate()
         let reply = Reply()
         delegate.terminationTimeout = .milliseconds(200)
@@ -63,11 +63,11 @@ struct AppDelegateTests {
 /// Captures the single answer AppKit is given, from whichever task produces it.
 private actor Reply {
     private var answer: Bool?
-    private(set) var count = 0
+    private(set) var answers = 0
 
     func record(_ answer: Bool) {
         self.answer = answer
-        count += 1
+        answers += 1
     }
 
     func wait(timeout: Duration = .seconds(5)) async -> Bool? {

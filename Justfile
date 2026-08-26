@@ -24,6 +24,20 @@ app-release:
 gen:
     xcodegen generate
 
+# Lint. Every rule SwiftLint has, minus the ones .swiftlint.yml argues with.
+lint:
+    swiftlint lint --strict
+
+# The rules that need a compiler log, which means a clean build first.
+lint-analyze:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p .build
+    LOG=.build/swiftlint-build.log
+    xcodebuild -project BoyaManager.xcodeproj -scheme BoyaManager -configuration Debug \
+        -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode clean build > "$LOG"
+    swiftlint analyze --strict --compiler-log-path "$LOG"
+
 # Run the app
 run: app
     open build/BoyaManager.app

@@ -271,9 +271,12 @@ actor IAP2Link {
         theirAck = nil
         for attempt in 1...3 {
             try await transport.write(LinkPacket(control: [.syn, .ack], seq: seq, ack: rack, session: 0, payload: syn.payload).encode())
-            if await waitFor(.acknowledged(seq), timeout: .milliseconds(1500)) {
+            if await waitFor(.acknowledged(seq), timeout: .milliseconds(1_500)) {
                 isLinked = true
-                logger.notice("iAP2 link up (control session \(self.sessionControl ?? 0, privacy: .public), EA session \(self.sessionExternalAccessory ?? 0, privacy: .public))")
+                logger.notice("""
+                    iAP2 link up (control session \(self.sessionControl ?? 0, privacy: .public), \
+                    EA session \(self.sessionExternalAccessory ?? 0, privacy: .public))
+                    """)
                 return
             }
             if wasReset { throw LinkError.reset }
@@ -399,7 +402,10 @@ actor IAP2Link {
             if isClosing || end != nil { throw LinkError.notLinked }
             // Routine: the receiver piggybacks acknowledgements on its own
             // traffic, so an idle moment costs one retransmission.
-            logger.debug("Link packet seq \(mySeq, privacy: .public) unacknowledged, attempt \(attempt, privacy: .public)/\(retries, privacy: .public)")
+            logger.debug("""
+                Link packet seq \(mySeq, privacy: .public) unacknowledged, \
+                attempt \(attempt, privacy: .public)/\(retries, privacy: .public)
+                """)
         }
         throw LinkError.notAcknowledged(mySeq)
     }
@@ -474,11 +480,11 @@ actor IAP2Link {
 
 struct LinkControl: OptionSet, Sendable, Equatable {
     let rawValue: UInt8
-    static let syn = LinkControl(rawValue: 0x80)
-    static let ack = LinkControl(rawValue: 0x40)
-    static let eak = LinkControl(rawValue: 0x20)
-    static let rst = LinkControl(rawValue: 0x10)
-    static let slp = LinkControl(rawValue: 0x08)
+    static let syn = Self(rawValue: 0x80)
+    static let ack = Self(rawValue: 0x40)
+    static let eak = Self(rawValue: 0x20)
+    static let rst = Self(rawValue: 0x10)
+    static let slp = Self(rawValue: 0x08)
 }
 
 /// `FF 5A | u16 BE length | ctrl | seq | ack | session | header checksum |
@@ -495,7 +501,7 @@ struct LinkPacket: Sendable, Equatable {
     static let headerLength = 9
 
     func encode() -> [UInt8] {
-        let length = LinkPacket.headerLength + (payload.isEmpty ? 0 : payload.count + 1)
+        let length = Self.headerLength + (payload.isEmpty ? 0 : payload.count + 1)
         var header: [UInt8] = [0xFF, 0x5A]
         header.append(contentsOf: UInt16(length).bigEndianBytes)
         header.append(contentsOf: [control.rawValue, seq, ack, session])
@@ -594,14 +600,14 @@ struct ControlParameter: Sendable, Equatable {
         UInt16(4 + data.count).bigEndianBytes + id.bigEndianBytes + data
     }
 
-    static func parse(_ bytes: [UInt8]) -> [ControlParameter] {
-        var parameters: [ControlParameter] = []
+    static func parse(_ bytes: [UInt8]) -> [Self] {
+        var parameters: [Self] = []
         var index = 0
         while index + 4 <= bytes.count {
             let length = Int(UInt16(bigEndianAt: bytes, index))
             let id = UInt16(bigEndianAt: bytes, index + 2)
             guard length >= 4, index + length <= bytes.count else { break }
-            parameters.append(ControlParameter(id: id, data: Array(bytes[(index + 4)..<(index + length)])))
+            parameters.append(Self(id: id, data: Array(bytes[(index + 4)..<(index + length)])))
             index += length
         }
         return parameters

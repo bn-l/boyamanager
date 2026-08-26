@@ -46,7 +46,11 @@ enum UIPreview {
             state.apply(.state(.ready))
             state.apply(.identified(previewIdentity))
             state.apply(.snapshot(sampleSnapshot))
-            try render(SettingsView(preferences: preferences, state: state), size: NSSize(width: 460, height: 380), to: directory.appending(path: "settings.png"))
+            try render(
+                SettingsView(preferences: preferences, state: state),
+                size: NSSize(width: 460, height: 380),
+                to: directory.appending(path: "settings.png")
+            )
 
             let disconnected = MicState(preferences: preferences)
             disconnected.apply(.state(.failed(.claimFailed)))
@@ -82,8 +86,10 @@ enum UIPreview {
     /// never visits.
     private static func render(_ view: some View, size: NSSize, to url: URL) throws {
         let window = NSWindow(
-            contentRect: NSRect(origin: CGPoint(x: -5000, y: -5000), size: size),
-            styleMask: [.titled], backing: .buffered, defer: false
+            contentRect: NSRect(origin: CGPoint(x: -5_000, y: -5_000), size: size),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
         )
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -95,8 +101,10 @@ enum UIPreview {
         let scale = window.backingScaleFactor
         guard let context = CGContext(
             data: nil,
-            width: Int(size.width * scale), height: Int(size.height * scale),
-            bitsPerComponent: 8, bytesPerRow: 0,
+            width: Int(size.width * scale),
+            height: Int(size.height * scale),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else { throw CocoaError(.fileWriteUnknown) }

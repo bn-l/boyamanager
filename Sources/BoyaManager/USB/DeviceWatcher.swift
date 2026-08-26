@@ -79,7 +79,10 @@ actor DeviceWatcher {
             &iterator
         )
         guard result == KERN_SUCCESS else {
-            logger.error("IOServiceAddMatchingNotification(\(notificationType, privacy: .public)) failed: 0x\(String(UInt32(bitPattern: result), radix: 16), privacy: .public)")
+            logger.error("""
+                IOServiceAddMatchingNotification(\(notificationType, privacy: .public)) failed: \
+                0x\(String(UInt32(bitPattern: result), radix: 16), privacy: .public)
+                """)
             retained.release()
             return
         }

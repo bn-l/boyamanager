@@ -1,5 +1,5 @@
-import Foundation
 @testable import BoyaManager
+import Foundation
 
 /// Records everything a session publishes and lets a test wait for a condition
 /// over the whole history. One recorder per session — `events` is a single
@@ -51,19 +51,31 @@ actor SessionRecorder {
     }
 
     var states: [ConnectionState] {
-        events.compactMap { if case .state(let state) = $0 { return state } else { return nil } }
+        events.compactMap { event in
+            guard case .state(let state) = event else { return nil }
+            return state
+        }
     }
 
     var snapshots: [AttributeSnapshot] {
-        events.compactMap { if case .snapshot(let snapshot) = $0 { return snapshot } else { return nil } }
+        events.compactMap { event in
+            guard case .snapshot(let snapshot) = event else { return nil }
+            return snapshot
+        }
     }
 
     var identities: [DeviceIdentity] {
-        events.compactMap { if case .identified(let identity) = $0 { return identity } else { return nil } }
+        events.compactMap { event in
+            guard case .identified(let identity) = event else { return nil }
+            return identity
+        }
     }
 
     var writeResults: [(attr: Attr, result: Result<UInt8, SessionError>)] {
-        events.compactMap { if case .writeResult(let attr, let result) = $0 { return (attr, result) } else { return nil } }
+        events.compactMap { event in
+            guard case let .writeResult(attr, result) = event else { return nil }
+            return (attr, result)
+        }
     }
 
     /// Waits for the `number`-th (1-based) write result for `attr` and returns
@@ -86,7 +98,10 @@ actor SessionRecorder {
     }
 
     var connectAttempts: [Int] {
-        states.compactMap { if case .connecting(let attempt) = $0 { return attempt } else { return nil } }
+        states.compactMap { state in
+            guard case .connecting(let attempt) = state else { return nil }
+            return attempt
+        }
     }
 
     var reachedReady: Bool { states.contains(.ready) }
@@ -177,4 +192,15 @@ struct SessionHarness {
         await runTask.value
         await recorder.stop()
     }
+}
+
+/// A throwaway defaults domain, one per call, so nothing touches the real one.
+/// A nil here means the suite name was rejected, which is a broken test rather
+/// than a condition worth handling.
+@MainActor
+func scratchUserDefaults() -> UserDefaults {
+    guard let defaults = UserDefaults(suiteName: "boya-manager-tests-\(UUID().uuidString)") else {
+        fatalError("UserDefaults refused a scratch suite name")
+    }
+    return defaults
 }

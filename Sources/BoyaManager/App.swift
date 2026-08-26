@@ -40,8 +40,10 @@ enum BoyaManagerMain {
 }
 
 struct BoyaManagerApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @Environment(\.openSettings) private var openSettings
+    @NSApplicationDelegateAdaptor(AppDelegate.self)
+    private var delegate
+    @Environment(\.openSettings)
+    private var openSettings
 
     var body: some Scene {
         MenuBarExtra {
@@ -80,6 +82,11 @@ final class AppController {
     private var session: ReceiverSession?
     private var sessionTask: Task<Void, Never>?
     private var appearanceObserver: AppearanceObserver?
+    /// Block-based observers are only removable through the token
+    /// `addObserver` hands back. Discarding them leaves the blocks registered
+    /// for the life of the process, firing at a session that has been shut
+    /// down.
+    private var workspaceObservers: [any NSObjectProtocol] = []
     private var isDarkAppearance = true
 
     init() {
@@ -111,31 +118,31 @@ final class AppController {
         sessionTask = Task { await session.run() }
         Task { await watcher.start() }
 
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in await Shared.controller.session?.recheck() }
-        }
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in await Shared.controller.session?.recheck() }
-        }
+        observe(NSWorkspace.didWakeNotification) { await $0.recheck() }
+        observe(NSWorkspace.sessionDidBecomeActiveNotification) { await $0.recheck() }
         // Nothing is reading a menu bar icon on a display that is off.
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
+        observe(NSWorkspace.screensDidSleepNotification) { await $0.setDisplayAsleep(true) }
+        observe(NSWorkspace.screensDidWakeNotification) { await $0.setDisplayAsleep(false) }
+    }
+
+    private func observe(_ name: Notification.Name, _ handler: @escaping @Sendable (ReceiverSession) async -> Void) {
+        let token = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: name, object: nil, queue: .main
         ) { _ in
-            Task { @MainActor in await Shared.controller.session?.setDisplayAsleep(true) }
+            Task { @MainActor in
+                guard let session = Shared.controller.session else { return }
+                await handler(session)
+            }
         }
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in await Shared.controller.session?.setDisplayAsleep(false) }
-        }
+        workspaceObservers.append(token)
     }
 
     func stop() async {
         logger.notice("BoyaManager terminating")
+        for token in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        workspaceObservers = []
         state.stop()
         await session?.shutdown()
         await watcher.stop()
@@ -158,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user wait while it finds that out.
     var isDuplicateInstance = false
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
+    func applicationWillFinishLaunching(_: Notification) {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
         let alreadyRunning = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .contains { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
@@ -169,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         // LSUIElement covers the bundled app; this covers `swift run`.
         NSApp.setActivationPolicy(.accessory)
         Shared.controller.start()
@@ -182,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// on a semaphore parks the very thread that would run `stop()` — it is
     /// MainActor work — so the wait always times out and the shutdown never
     /// happens at all.
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
         guard !isDuplicateInstance else { return .terminateNow }
         let timeout = terminationTimeout
         Task {

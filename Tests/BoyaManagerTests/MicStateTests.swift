@@ -1,6 +1,6 @@
+@testable import BoyaManager
 import Foundation
 import Testing
-@testable import BoyaManager
 
 @Suite("Mic state")
 @MainActor
@@ -11,8 +11,7 @@ struct MicStateTests {
         notifications: Bool = true,
         centre: FakeNotificationCentre = FakeNotificationCentre(permission: .allowed)
     ) async -> MicState {
-        let defaults = UserDefaults(suiteName: "boya-manager-tests-\(UUID().uuidString)")!
-        let preferences = Preferences(defaults: defaults)
+        let preferences = Preferences(defaults: scratchUserDefaults())
         preferences.notificationsEnabled = notifications
         let state = MicState(preferences: preferences, notifications: centre)
         await state.refreshNotificationPermission()
@@ -86,7 +85,7 @@ struct MicStateTests {
     }
 
     @Test("A control is disabled while its write is in flight, so it cannot flicker")
-    func pendingWriteDisablesControl() async throws {
+    func pendingWriteDisablesControl() async {
         // End to end against a scripted receiver: the flicker this guards
         // against only exists because a real write takes a round trip.
         let accessory = FakeAccessory()
@@ -423,15 +422,15 @@ final class FakeNotificationCentre: NotificationCentre {
         self.answersRequestWith = answersRequestWith
     }
 
-    func permission() async -> NotificationPermission { current }
+    func permission() -> NotificationPermission { current }
 
-    func requestPermission() async -> NotificationPermission {
+    func requestPermission() -> NotificationPermission {
         requestCount += 1
         current = answersRequestWith
         return current
     }
 
-    func post(title: String, body: String) async { posted.append(title) }
+    func post(title: String, body _: String) { posted.append(title) }
 
     func openSystemSettings() { openedSettings += 1 }
 }

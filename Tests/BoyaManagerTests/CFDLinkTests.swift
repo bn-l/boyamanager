@@ -1,5 +1,5 @@
-import Testing
 @testable import BoyaManager
+import Testing
 
 @Suite("CFD-Link codec")
 struct CFDLinkTests {
@@ -7,9 +7,9 @@ struct CFDLinkTests {
     func encodeMatchesCapture() {
         let frame = CFDLink.encode(
             message: .getAttribute,
+            seq: 13,
             payload: [Attr.noiseCancellation.rawValue],
-            node: .settings,
-            seq: 13
+            node: .settings
         )
 
         #expect(frame == Fixtures.getNoiseCancellationRequest)
@@ -17,7 +17,7 @@ struct CFDLinkTests {
 
     @Test("Encoding `get_all` reproduces the captured request byte for byte")
     func encodeGetAllMatchesCapture() {
-        let frame = CFDLink.encode(message: .getMany, payload: [0], node: .settings, seq: 23)
+        let frame = CFDLink.encode(message: .getMany, seq: 23, payload: [0], node: .settings)
 
         #expect(frame == Fixtures.getAllRequest)
     }
@@ -38,7 +38,7 @@ struct CFDLinkTests {
         let payload: [UInt8] = [0x2F, 0x01, 0x02, 0xFF, 0x00]
         let node = CFDNode(chid: 3, vid: 4, pid: 0x1234)
 
-        let encoded = CFDLink.encode(message: .setAttribute, payload: payload, node: node, seq: 0xBEEF)
+        let encoded = CFDLink.encode(message: .setAttribute, seq: 0xBEEF, payload: payload, node: node)
         let frame = try #require(CFDFrame(parsing: encoded))
 
         #expect(frame.payload == payload)
@@ -278,13 +278,12 @@ struct AttributeTests {
     }
 
     @Test("The mini 2 set is the 24 attributes the model answers for")
-    func miniTwoSet() {
+    func miniTwoSet() throws {
         #expect(Attr.miniTwo.count == 24)
         // Every attribute in the captured dump belongs to it.
         for id in Fixtures.getAllExpected.keys {
-            let attr = Attr(rawValue: id)
-            #expect(attr != nil, "unknown attribute id \(id)")
-            #expect(Attr.miniTwo.contains(attr!), "\(attr!.name) missing from Attr.miniTwo")
+            let attr = try #require(Attr(rawValue: id), "unknown attribute id \(id)")
+            #expect(Attr.miniTwo.contains(attr), "\(attr.name) missing from Attr.miniTwo")
         }
     }
 }

@@ -1,13 +1,13 @@
+@testable import BoyaManager
 import Foundation
 import Testing
-@testable import BoyaManager
 
 @Suite("Preferences")
 @MainActor
 struct PreferencesTests {
     /// A throwaway defaults domain per test, so nothing touches the real one.
     private func scratchDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "boya-manager-tests-\(UUID().uuidString)")!
+        scratchUserDefaults()
     }
 
     @Test("Defaults are the ones the app ships with")
@@ -129,7 +129,6 @@ struct PreferencesTests {
 
         #expect(preferences.loginItem == .needsApproval)
     }
-
 }
 
 /// The login-item registry, without the system daemon behind it.
@@ -150,7 +149,7 @@ final class FakeLoginItems: LoginItemStore {
         state = registerResult
     }
 
-    func unregister() throws {
+    func unregister() {
         unregisterCount += 1
         state = .off
     }

@@ -111,7 +111,7 @@ final class MicState {
             self.snapshot = snapshot
             lastUpdate = Date()
             checkTransmitterNotifications()
-        case .writeResult(let attr, let result):
+        case let .writeResult(attr, result):
             pendingWrites.remove(attr)
             switch result {
             case .success(let value):
@@ -153,7 +153,7 @@ final class MicState {
         case .notReady: "\(attr.title) could not be changed — the receiver is not connected."
         case .timeout: "\(attr.title) did not answer."
         case .unavailable: "\(attr.title) is not available right now."
-        case .outOfRange(let value, let range): "\(value) is outside \(range.lowerBound)…\(range.upperBound) for \(attr.title)."
+        case let .outOfRange(value, range): "\(value) is outside \(range.lowerBound)…\(range.upperBound) for \(attr.title)."
         case .riskyWriteRefused: "\(attr.title) needs to be changed from Settings › Advanced."
         }
     }
@@ -199,7 +199,7 @@ final class MicState {
             return "Connected"
         case .connecting(let attempt):
             return attempt > 1 ? "Connecting… (attempt \(attempt))" : "Connecting…"
-        case .waitingToRetry(let reason, let attempt, let seconds):
+        case let .waitingToRetry(reason, attempt, seconds):
             return "\(reason.summary.capitalizedFirst) — retrying in \(seconds)s (attempt \(attempt))"
         case .failed(let reason):
             return "Failed: \(reason.summary)"
@@ -272,7 +272,7 @@ final class MicState {
         wasEverReady = false
         let reason: String
         switch state {
-        case .failed(let kind), .waitingToRetry(let kind, _, _): reason = kind.summary.capitalizedFirst
+        case let .failed(kind), let .waitingToRetry(kind, _, _): reason = kind.summary.capitalizedFirst
         default: reason = "It is no longer connected."
         }
         notify(title: "BOYA receiver disconnected", body: reason)

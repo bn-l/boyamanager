@@ -79,16 +79,15 @@ actor USBTransport: ByteTransport {
             let interface = try IOUSBHostInterface(
                 __ioService: service,
                 options: [],
-                queue: queue,
-                interestHandler: { _, messageType, _ in
-                    logger.info("Interest message 0x\(String(messageType, radix: 16), privacy: .public)")
-                    if messageType == serviceIsTerminated {
-                        logger.notice("Interface terminated — ending the inbound stream")
-                        terminated.set()
-                        continuation.finish()
-                    }
+                queue: queue
+            ) { _, messageType, _ in
+                logger.info("Interest message 0x\(String(messageType, radix: 16), privacy: .public)")
+                if messageType == serviceIsTerminated {
+                    logger.notice("Interface terminated — ending the inbound stream")
+                    terminated.set()
+                    continuation.finish()
                 }
-            )
+            }
             self.interface = interface
             inPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkInEndpoint)
             outPipe = try interface.copyPipe(withAddress: BoyaDevice.bulkOutEndpoint)
@@ -97,7 +96,10 @@ actor USBTransport: ByteTransport {
             logger.error("Could not open the iAP interface: \(error.localizedDescription, privacy: .public)")
             throw TransportError.claimFailed(IOReturn((error as NSError).code))
         }
-        logger.notice("iAP interface open (pipes 0x\(String(BoyaDevice.bulkOutEndpoint, radix: 16), privacy: .public)/0x\(String(BoyaDevice.bulkInEndpoint, radix: 16), privacy: .public))")
+        logger.notice("""
+            iAP interface open (pipes 0x\(String(BoyaDevice.bulkOutEndpoint, radix: 16), privacy: .public)/\
+            0x\(String(BoyaDevice.bulkInEndpoint, radix: 16), privacy: .public))
+            """)
     }
 
     func inbound() -> AsyncStream<[UInt8]> {
@@ -119,7 +121,10 @@ actor USBTransport: ByteTransport {
         guard !isClosed else { throw TransportError.closed }
         logger.debug("-> \(bytes.hexString, privacy: .public)")
         let data = try interface.ioData(withCapacity: bytes.count)
-        bytes.withUnsafeBytes { data.replaceBytes(in: NSRange(location: 0, length: bytes.count), withBytes: $0.baseAddress!) }
+        bytes.withUnsafeBytes { source in
+            guard let base = source.baseAddress else { return }
+            data.replaceBytes(in: NSRange(location: 0, length: bytes.count), withBytes: base)
+        }
         let buffer = DataBox(data)
         let pipe = outPipe
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -252,17 +257,17 @@ private final class BulkReader: @unchecked Sendable {
                     if status != kIOReturnAborted {
                         logger.error("Bulk read failed: 0x\(String(UInt32(bitPattern: status), radix: 16), privacy: .public)")
                     }
-                    self.isRunning = false
-                    self.continuation.finish()
+                    isRunning = false
+                    continuation.finish()
                     return
                 }
-                let count = min(transferred, self.buffer.length)
+                let count = min(transferred, buffer.length)
                 if count > 0 {
-                    let bytes = [UInt8](Data(bytes: self.buffer.bytes, count: count))
+                    let bytes = [UInt8](Data(bytes: buffer.bytes, count: count))
                     logger.debug("<- \(bytes.hexString, privacy: .public)")
-                    self.continuation.yield(bytes)
+                    continuation.yield(bytes)
                 }
-                self.enqueue()
+                enqueue()
             }
         } catch {
             logger.error("Bulk read could not be enqueued: \(error.localizedDescription, privacy: .public)")
@@ -290,5 +295,6 @@ private final class TerminationFlag: Sendable {
 /// exactly as safe as the USB API itself.
 private final class DataBox: @unchecked Sendable {
     let data: NSMutableData
+
     init(_ data: NSMutableData) { self.data = data }
 }

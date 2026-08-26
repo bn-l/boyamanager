@@ -1,6 +1,6 @@
+@testable import BoyaManager
 import Foundation
 import Testing
-@testable import BoyaManager
 
 @Suite("Receiver session, end to end against a scripted accessory")
 @MainActor
@@ -32,11 +32,11 @@ struct ReceiverSessionTests {
         await harness.finish()
     }
 
-    private nonisolated static func reachedReady(_ events: [SessionEvent]) -> Bool {
+    nonisolated private static func reachedReady(_ events: [SessionEvent]) -> Bool {
         events.contains { if case .state(.ready) = $0 { true } else { false } }
     }
 
-    private nonisolated static func sawSnapshot(_ events: [SessionEvent]) -> Bool {
+    nonisolated private static func sawSnapshot(_ events: [SessionEvent]) -> Bool {
         events.contains { if case .snapshot = $0 { true } else { false } }
     }
 
@@ -88,8 +88,8 @@ struct ReceiverSessionTests {
             harness.send(.arrived)
             #expect(await harness.recorder.wait(until: Self.sawSnapshot))
 
-            let beats = await accessory.hostFrames.filter {
-                $0.message == CFDMessage.heartbeat.rawValue && $0.node == .broadcast && $0.payload.count >= 13
+            let beats = await accessory.hostFrames.filter { frame in
+                frame.message == CFDMessage.heartbeat.rawValue && frame.node == .broadcast && frame.payload.count >= 13
             }
             #expect(beats.count >= 2, "only \(beats.count) host heartbeats — nothing to compare")
             let ticks = beats.map { frame in
@@ -139,7 +139,7 @@ struct ReceiverSessionTests {
     @Test("A reply that lands before the acknowledgement is still matched to its request")
     func replyBeforeAcknowledgement() async throws {
         let link = EagerLink()
-        let harness = await SessionHarness(makeLink: { link })
+        let harness = await SessionHarness { link }
 
         harness.send(.arrived)
 
@@ -407,8 +407,8 @@ struct ReceiverSessionTests {
             await accessory.resetLink()
 
             let diagnosed = await harness.recorder.wait(timeout: .seconds(20)) { events in
-                events.contains {
-                    if case .state(.waitingToRetry(.reset, _, _)) = $0 { true } else { false }
+                events.contains { event in
+                    if case .state(.waitingToRetry(.reset, _, _)) = event { true } else { false }
                 }
             }
             let states = await harness.recorder.states
@@ -428,8 +428,8 @@ struct ReceiverSessionTests {
             await accessory.stopHeartbeating()
 
             #expect(await harness.recorder.wait(timeout: .seconds(20)) { events in
-                events.contains {
-                    if case .state(.waitingToRetry(.unresponsive, _, _)) = $0 { true } else { false }
+                events.contains { event in
+                    if case .state(.waitingToRetry(.unresponsive, _, _)) = event { true } else { false }
                 }
             }, "a link with no heartbeats on it is dead, whatever its acknowledgements say")
         }
@@ -541,11 +541,9 @@ struct ReceiverSessionTests {
     }
 
     @Test("Quitting tells the receiver to stop the session, exactly once")
-    func shutdownStopsSessionOnce() async throws {
+    func shutdownStopsSessionOnce() async {
         let accessory = FakeAccessory()
-        let harness = await SessionHarness(
-            makeLink: { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: Clock.linkSleeper) }
-        )
+        let harness = await SessionHarness { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: Clock.linkSleeper) }
         harness.send(.arrived)
         #expect(await harness.recorder.wait(until: Self.reachedReady))
 
@@ -612,7 +610,7 @@ private actor EagerLink: AccessoryLink {
         (eaInbound, continuation) = AsyncStream.makeStream(of: [UInt8].self)
     }
 
-    func open(protocolName: String, sessionID: UInt16, timeout: Duration) async throws -> DeviceIdentity {
+    func open(protocolName _: String, sessionID _: UInt16, timeout _: Duration) -> DeviceIdentity {
         DeviceIdentity()
     }
 
@@ -626,7 +624,7 @@ private actor EagerLink: AccessoryLink {
 
     /// One device heartbeat, which is all the warm-up waits for. Beating back
     /// at every host beat would just ping-pong.
-    func sendHeartbeatEA(_ bytes: [UInt8]) async throws {
+    func sendHeartbeatEA(_: [UInt8]) {
         guard !hasBeaten else { return }
         hasBeaten = true
         continuation.yield(Fixtures.nodeHeartbeat)
@@ -641,6 +639,7 @@ private actor EagerLink: AccessoryLink {
 /// Counts calls, for makeLink factories that need to fail a fixed number of times.
 actor Counter {
     private var count = 0
+
     func next() -> Int {
         count += 1
         return count

@@ -1,5 +1,5 @@
-import Foundation
 @testable import BoyaManager
+import Foundation
 
 /// A scripted BOYA mini 2: the accessory half of iAP2, plus the little CFD-Link
 /// router that lives behind its External Accessory session. It replays the
@@ -106,7 +106,7 @@ actor FakeAccessory: ByteTransport {
         return stream
     }
 
-    func write(_ bytes: [UInt8]) async throws {
+    func write(_ bytes: [UInt8]) throws {
         guard !isClosed else { throw Failure.closed }
         hostRawWrites.append(bytes)
         for item in parser.feed(bytes) {
@@ -245,9 +245,9 @@ actor FakeAccessory: ByteTransport {
         let payload: [UInt8] = attributes[id].map { [0, id, 1, $0] } ?? [1, id]
         return CFDLink.encode(
             message: message,
+            seq: 1,
             payload: payload,
             node: CFDNode(chid: 2, vid: 1, pid: 29),
-            seq: 1,
             src: CFDLink.deviceNode,
             dst: CFDLink.hostNode
         )
@@ -256,7 +256,7 @@ actor FakeAccessory: ByteTransport {
     /// Pushes CFD bytes back through the EA session, which is where the
     /// receiver's frames come from.
     func sendFrames(_ frames: [[UInt8]]) {
-        let payload = UInt16(1).bigEndianBytes + frames.flatMap { $0 }
+        let payload = UInt16(1).bigEndianBytes + frames.flatMap(\.self)
         emitData(session: 2, payload: payload, seq: nextAccessorySeq())
     }
 
@@ -289,7 +289,7 @@ actor FakeAccessory: ByteTransport {
     /// Sends the same EA data packet twice with the same sequence number — a
     /// retransmission, which the host must acknowledge twice but deliver once.
     func sendDuplicatedFrames(_ frames: [[UInt8]]) {
-        let payload = UInt16(1).bigEndianBytes + frames.flatMap { $0 }
+        let payload = UInt16(1).bigEndianBytes + frames.flatMap(\.self)
         let sequence = nextAccessorySeq()
         emitData(session: 2, payload: payload, seq: sequence)
         emitData(session: 2, payload: payload, seq: sequence)

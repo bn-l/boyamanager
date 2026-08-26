@@ -1,6 +1,6 @@
 import AppKit
-import Testing
 @testable import BoyaManager
+import Testing
 
 @Suite("Menu bar icon")
 struct MicBadgeIconTests {
@@ -16,9 +16,15 @@ struct MicBadgeIconTests {
         let pixels = Int(size) * Self.scale
         let rep = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil,
-            pixelsWide: pixels, pixelsHigh: pixels,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            pixelsWide: pixels,
+            pixelsHigh: pixels,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
         ))
         rep.size = NSSize(width: size, height: size)
         NSGraphicsContext.saveGraphicsState()

@@ -1,7 +1,7 @@
+@testable import BoyaManager
 import Foundation
 import IOKit
 import Testing
-@testable import BoyaManager
 
 /// The real thing. Opt in with `BOYA_HARDWARE=1 swift test --filter HardwareTests`
 /// and a receiver plugged in. Enabled without a device, these hard-fail rather

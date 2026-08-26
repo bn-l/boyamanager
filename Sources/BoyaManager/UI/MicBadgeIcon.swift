@@ -157,8 +157,10 @@ enum MicBadgeIcon {
             let start = floor + (ceiling - floor - block) / 2
             return (0..<4).map { index in
                 CGRect(
-                    x: barLeft, y: start + (barHeight + barGap) * CGFloat(index),
-                    width: barRight - barLeft, height: barHeight
+                    x: barLeft,
+                    y: start + (barHeight + barGap) * CGFloat(index),
+                    width: barRight - barLeft,
+                    height: barHeight
                 )
             }
         }
@@ -209,7 +211,7 @@ extension MicBadgeIcon.Kind {
 
     var accessibilityDescription: String {
         switch self {
-        case .level(let level, let online):
+        case let .level(level, online):
             "BOYA mic battery \(level) of 4, \(online) transmitter\(online == 1 ? "" : "s") online"
         case .offline: "BOYA mic offline"
         case .disconnected: "BOYA receiver not connected"
@@ -228,7 +230,7 @@ extension MicBadgeIcon {
             let dark: Bool
             var name: String {
                 let base = switch kind {
-                case .level(let level, let online): "level\(level)-online\(online)"
+                case let .level(level, online): "level\(level)-online\(online)"
                 case .offline: "offline"
                 case .disconnected: "disconnected"
                 case .connecting: "connecting"

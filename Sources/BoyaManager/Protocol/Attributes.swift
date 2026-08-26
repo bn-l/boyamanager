@@ -271,8 +271,8 @@ struct AttributeSnapshot: Sendable, Equatable {
 
     /// Merges a newer reply over this one. Used for single-attribute read-backs,
     /// which must not blank out everything else the poll knows.
-    func merging(_ other: AttributeSnapshot) -> AttributeSnapshot {
-        AttributeSnapshot(status: other.status, values: values.merging(other.values) { _, new in new })
+    func merging(_ other: Self) -> Self {
+        Self(status: other.status, values: values.merging(other.values) { _, new in new })
     }
 
     /// Ordered for display: known mini 2 attributes by id, then anything else.

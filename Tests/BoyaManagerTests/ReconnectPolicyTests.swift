@@ -1,5 +1,5 @@
-import Testing
 @testable import BoyaManager
+import Testing
 
 @Suite("Reconnect policy")
 struct ReconnectPolicyTests {

@@ -96,7 +96,8 @@ struct PopoverView: View {
         }
     }
 
-    @ViewBuilder private func enumControl(_ attr: Attr) -> some View {
+    @ViewBuilder
+    private func enumControl(_ attr: Attr) -> some View {
         LabeledControl(title: attr.title, isEnabled: state.isEnabled(attr)) {
             if state.isAvailable(attr), let labels = attr.labels {
                 Picker("", selection: binding(attr)) {
@@ -162,6 +163,7 @@ private struct TransmitterRow: View {
             Image(systemName: transmitter.isOnline ? "circle.fill" : "circle")
                 .font(.system(size: 7))
                 .foregroundStyle(transmitter.isOnline ? Color.green : Color.secondary)
+                .accessibilityLabel(transmitter.isOnline ? "online" : "offline")
             Text("TX\(transmitter.index)")
                 .font(.system(size: 12, weight: .medium))
                 .frame(width: 30, alignment: .leading)
@@ -173,6 +175,7 @@ private struct TransmitterRow: View {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 8))
                         .foregroundStyle(.green)
+                        .accessibilityLabel("charging")
                 }
                 Text("battery").font(.system(size: 11)).foregroundStyle(.secondary)
                 LevelBars(level: transmitter.signal, tint: .secondary)

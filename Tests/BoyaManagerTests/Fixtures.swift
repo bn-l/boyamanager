@@ -1,5 +1,5 @@
-import Foundation
 @testable import BoyaManager
+import Foundation
 
 /// Bytes captured from a real BOYA mini 2 receiver, not bytes a test author
 /// invented. Every codec test checks against these, so a "fix" that changes the
@@ -69,9 +69,9 @@ enum Fixtures {
     /// from the host's own broadcast beat — `src`/`dst` are 2 → 1 for both.
     static let nodeHeartbeat = CFDLink.encode(
         message: .heartbeat,
+        seq: 0x5128,
         payload: Array(deviceHeartbeat[CFDLink.headerLength..<(deviceHeartbeat.count - 1)]),
         node: heartbeatingNode,
-        seq: 0x5128,
         src: CFDLink.deviceNode,
         dst: CFDLink.hostNode
     )
