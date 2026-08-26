@@ -484,7 +484,7 @@ actor ReceiverSession {
             // notice the display coming back, which costs one wakeup a
             // ten-second interval.
             guard !isDisplayAsleep else {
-                guard (try? await sleeper(timings.idlePoll)) != nil else { return nil }
+                guard (try? await sleeper(timings.fastPoll)) != nil else { return nil }
                 continue
             }
 
@@ -508,9 +508,28 @@ actor ReceiverSession {
                 logger.error("get_all timed out (\(self.consecutiveTimeouts, privacy: .public)/3)")
                 if consecutiveTimeouts >= 3 { return .unresponsive }
             }
-            guard (try? await sleeper(pollInterval)) != nil else { return nil }
+            guard await waitForNextPoll() else { return nil }
         }
         return nil
+    }
+
+    /// Waits out the cadence in slices no longer than the fast one, re-reading
+    /// `pollInterval` each time.
+    ///
+    /// A single sleep of the whole interval would be cheaper, but an interval
+    /// that has already started does not care that the cadence has changed
+    /// underneath it: opening the popover six seconds into a ten-second wait
+    /// left the popover stale for the remaining four, immediate out-of-band
+    /// poll or not. Slicing costs one timer a second and makes a change of
+    /// cadence take effect within one fast interval.
+    private func waitForNextPoll() async -> Bool {
+        var waited = Duration.zero
+        while waited < pollInterval {
+            let slice = min(timings.fastPoll, pollInterval - waited)
+            guard (try? await sleeper(slice)) != nil else { return false }
+            waited += slice
+        }
+        return true
     }
 
     /// One poll outside the loop's cadence, for the moments when waiting out

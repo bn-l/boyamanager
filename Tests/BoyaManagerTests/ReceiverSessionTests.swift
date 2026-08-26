@@ -40,17 +40,6 @@ struct ReceiverSessionTests {
         events.contains { if case .snapshot = $0 { true } else { false } }
     }
 
-    /// Polls `check` until it holds or the deadline passes — for the things the
-    /// recorder cannot see, like which delay the session asked its clock for.
-    private func settle(within timeout: Duration = .seconds(10), until check: () async -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if await check() { return true }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return await check()
-    }
-
     @Test("An arriving device is taken all the way to ready")
     func reachesReady() async throws {
         try await withHarness { harness, _ in
@@ -461,26 +450,26 @@ struct ReceiverSessionTests {
         }
     }
 
+    /// Counted rather than read off the clock: the loop waits in slices, so
+    /// which durations it asks its sleeper for says nothing about the cadence
+    /// it is keeping. How many polls land in a fixed window does.
     @Test("Polling is quick while the popover is open and slow when it is not")
     func pollIntervalFollowsAttention() async throws {
-        // Above the 500 ms heartbeat and the 100 ms warm-up tick, below both
-        // poll intervals, so `requested` is the cadence and nothing else. The
-        // device debounce is shortened out of the way for the same reason: it
-        // is a second, which is also the fast cadence.
-        let clock = Clock(ignoringBelow: .milliseconds(900))
-        try await withHarness(
-            timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50)),
-            clock: clock
-        ) { harness, _ in
+        try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, _ in
             harness.send(.arrived)
             #expect(await harness.recorder.wait(until: Self.sawSnapshot))
-            #expect(await settle { await clock.requested.contains(.seconds(10)) },
-                    "nobody is looking, so the loop should be waiting out the slow interval")
+
+            let idleStart = await harness.recorder.snapshots.count
+            try await Task.sleep(for: .milliseconds(500))
+            let idle = await harness.recorder.snapshots.count - idleStart
 
             await harness.session.setPopoverVisible(true)
+            let attentiveStart = await harness.recorder.snapshots.count
+            try await Task.sleep(for: .milliseconds(500))
+            let attentive = await harness.recorder.snapshots.count - attentiveStart
 
-            #expect(await settle { await clock.requested.contains(.seconds(1)) },
-                    "opening the popover should drop the interval to a second")
+            #expect(idle <= 1, "nobody is looking, but the loop polled \(idle) times in the window")
+            #expect(attentive >= 3, "the popover is open, but the loop polled \(attentive) times in the window")
         }
     }
 
@@ -503,6 +492,28 @@ struct ReceiverSessionTests {
             #expect(await harness.recorder.wait(timeout: .seconds(3)) { events in
                 events.count { if case .snapshot = $0 { true } else { false } } > before
             }, "the popover should not have to wait out an interval for its first numbers")
+        }
+    }
+
+    /// Seen on the device: the popover opened at 03:45:16.845 and got its
+    /// immediate poll, then nothing until 03:45:23.085 — because the loop was
+    /// already six seconds into a ten-second wait, and an interval that has
+    /// started does not care that the cadence has changed. Six seconds of stale
+    /// popover, with a transmitter connecting inside the window.
+    @Test("Opening the popover shortens a slow wait already in flight")
+    func popoverShortensTheWaitInFlight() async throws {
+        try await withHarness(timings: Self.slowPolling) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            let before = await harness.recorder.snapshots.count
+
+            await harness.session.setPopoverVisible(true)
+
+            // One poll comes straight away; the second is the loop noticing,
+            // and it must not be two minutes behind it.
+            #expect(await harness.recorder.wait(timeout: .seconds(3)) { events in
+                events.count { if case .snapshot = $0 { true } else { false } } >= before + 2
+            }, "the loop kept waiting out an interval nobody asked for any more")
         }
     }
 
