@@ -126,7 +126,7 @@ struct MicStateTests {
 
         state.apply(.snapshot(snapshot([.tx1Online: 1, .tx1Battery: 4, .tx2Online: 1, .tx2Battery: 2])))
 
-        #expect(state.iconKind == .level(2))
+        #expect(state.iconKind == .level(2, online: 2))
     }
 
     @Test("An offline transmitter does not get a say, however low it was")
@@ -136,7 +136,7 @@ struct MicStateTests {
 
         state.apply(.snapshot(snapshot([.tx1Online: 0, .tx1Battery: 1, .tx2Online: 1, .tx2Battery: 3])))
 
-        #expect(state.iconKind == .level(3))
+        #expect(state.iconKind == .level(3, online: 1))
     }
 
     @Test("Nothing online leaves the icon showing offline")

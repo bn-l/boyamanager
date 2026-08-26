@@ -157,7 +157,7 @@ final class MicState {
         switch connection {
         case .ready:
             guard let transmitter = iconTransmitter else { return .offline }
-            return .level(transmitter.battery ?? 0)
+            return .level(transmitter.battery ?? 0, online: transmitters.count(where: \.isOnline))
         case .connecting, .waitingToRetry:
             return .connecting
         case .idle, .failed:
@@ -165,13 +165,12 @@ final class MicState {
         }
     }
 
-    /// One bar left. Fixed rather than configurable: the icon draws the last
-    /// bar red, so anything else would put the warning and the drawing at odds.
-    static let lowBatteryLevel: UInt8 = 1
-
+    /// One bar left, the level at which the icon draws the bar red. Taken from
+    /// the icon rather than configured, so the warning and the drawing cannot
+    /// disagree.
     var isLowBattery: Bool {
-        guard case .level(let level) = iconKind else { return false }
-        return level <= Self.lowBatteryLevel
+        guard let level = iconKind.level else { return false }
+        return level <= MicBadgeIcon.lowBatteryLevel
     }
 
     /// Deliberately without the "updated Ns ago" part: a string formatted once
@@ -239,7 +238,7 @@ final class MicState {
             }
 
             guard transmitter.isOnline, preferences.notifyLowBattery,
-                  let battery = transmitter.battery, battery <= Self.lowBatteryLevel,
+                  let battery = transmitter.battery, battery <= MicBadgeIcon.lowBatteryLevel,
                   !lowBatteryNotified.contains(index)
             else { continue }
             lowBatteryNotified.insert(index)

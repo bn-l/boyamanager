@@ -91,11 +91,7 @@ final class AppController {
     /// The menu bar label. Reading `state` and `preferences` here is what makes
     /// Observation re-render the label when the device reports something new.
     var menuBarImage: NSImage {
-        MicBadgeIcon.image(
-            kind: state.iconKind,
-            lowBattery: state.isLowBattery,
-            darkAppearance: isDarkAppearance
-        )
+        MicBadgeIcon.image(kind: state.iconKind, darkAppearance: isDarkAppearance)
     }
 
     func start() {

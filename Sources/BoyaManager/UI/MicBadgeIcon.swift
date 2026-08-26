@@ -7,15 +7,19 @@ private let logger = Logger(subsystem: BoyaLog.subsystem, category: "Icon")
 /// bars inside it — a battery gauge shaped like a B.
 ///
 /// Normally a template image (alpha only) so macOS paints it correctly on light
-/// and dark menu bars and handles click highlighting. A low battery can't be a
-/// template — templates lose colour — so in that one state the outline is drawn
-/// in the appearance colour itself and the bars in red.
+/// and dark menu bars and handles click highlighting. Colour cannot survive a
+/// template, so a red last bar or a green online dot forces the outline to be
+/// drawn in the appearance ink instead.
 enum MicBadgeIcon {
     static let size: CGFloat = 18
+    /// The level at which the bar turns red. The rest of the app takes its
+    /// low-battery rule from here so the warning and the drawing agree.
+    static let lowBatteryLevel: UInt8 = 1
 
     enum Kind: Sendable, Equatable {
-        /// A transmitter is online; 0…4 bars.
-        case level(UInt8)
+        /// A transmitter is online: 0…4 bars, plus how many transmitters are
+        /// online at all. The dots are a count, not a which.
+        case level(UInt8, online: Int)
         /// Receiver connected, no transmitter online.
         case offline
         /// No receiver.
@@ -23,8 +27,8 @@ enum MicBadgeIcon {
         case connecting
     }
 
-    static func image(kind: Kind, lowBattery: Bool = false, darkAppearance: Bool = true) -> NSImage {
-        let coloured = lowBattery && kind.isLevel
+    static func image(kind: Kind, darkAppearance: Bool = true) -> NSImage {
+        let coloured = kind.isColoured
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else {
                 logger.error("No CGContext available for the badge")
@@ -36,17 +40,25 @@ enum MicBadgeIcon {
             defer { context.restoreGState() }
 
             let ink = inkColor(kind: kind, coloured: coloured, darkAppearance: darkAppearance)
-            ink.setFill()
-            Geometry.outline.fill()
+            ink.setStroke()
+            Geometry.outline.stroke()
 
-            if case .level(let level) = kind, level > 0 {
-                context.saveGState()
-                Geometry.counters.addClip()
-                (coloured ? NSColor.systemRed : ink).setFill()
+            if let level = kind.level, level > 0 {
+                (level <= lowBatteryLevel ? NSColor.systemRed : ink).setFill()
                 for bar in Geometry.bars.prefix(Int(min(level, 4))) {
-                    NSBezierPath(rect: bar).fill()
+                    NSBezierPath(roundedRect: bar, xRadius: Geometry.barRadius, yRadius: Geometry.barRadius).fill()
                 }
+            }
+
+            for centre in Geometry.dotCentres.prefix(kind.onlineCount) {
+                // Knock a ring out of the letter first, so a dot sitting on the
+                // stem reads as a dot rather than as a bulge in the stroke.
+                context.saveGState()
+                context.setBlendMode(.destinationOut)
+                NSBezierPath(circleAt: centre, radius: Geometry.dotRadius + Geometry.dotRing).fill()
                 context.restoreGState()
+                NSColor.systemGreen.setFill()
+                NSBezierPath(circleAt: centre, radius: Geometry.dotRadius).fill()
             }
 
             if kind == .disconnected {
@@ -86,94 +98,88 @@ enum MicBadgeIcon {
         return path
     }
 
-    /// The letter, hand-built rather than typeset: a stem plus two "D" lobes,
-    /// each lobe a filled outer shape with a reversed inner shape punched out of
-    /// it by the non-zero winding rule. Building it this way means the counters
-    /// — the two holes — are known paths, so the bars can be clipped exactly to
-    /// them instead of being fudged with insets.
+    /// The letter as one closed stroke — stem, top edge, upper lobe, the waist
+    /// notch, lower lobe, bottom edge — enclosing a single hollow. There is no
+    /// horizontal bar across the middle, so the bars inside need no clipping:
+    /// they simply stop short of the lobes.
     enum Geometry {
         static let stroke: CGFloat = 1.6
-        static let left: CGFloat = 2.0
-        static let bottom: CGFloat = 1.6
-        static let top: CGFloat = 16.4
-        static let waist: CGFloat = 9.5
-        /// The lower lobe of a B is the wider one.
-        static let upperRight: CGFloat = 13.0
-        static let lowerRight: CGFloat = 15.0
+        /// Centre line of the stem. The outer edge is half a stroke to its left.
+        static let stemX: CGFloat = 3.8
+        static let topY: CGFloat = 16.2
+        static let bottomY: CGFloat = 1.8
+        static let waistY: CGFloat = 9.4
+        /// Where the straight top and bottom edges give way to the lobes.
+        static let topEdgeEnd: CGFloat = 9.6
+        static let bottomEdgeEnd: CGFloat = 10.2
+        /// The lower lobe of a B is the wider one. Where the two meet, the
+        /// outline steps in and back out — the notch, on the outside only.
+        static let upperRight: CGFloat = 14.3
+        static let lowerRight: CGFloat = 15.2
+        static let waistX: CGFloat = 11.6
 
-        static let upperCounter = CGRect(
-            x: left + stroke, y: waist + stroke / 2,
-            width: (upperRight - stroke) - (left + stroke), height: (top - stroke) - (waist + stroke / 2)
-        )
-        static let lowerCounter = CGRect(
-            x: left + stroke, y: bottom + stroke,
-            width: (lowerRight - stroke) - (left + stroke), height: (waist - stroke / 2) - (bottom + stroke)
-        )
+        static let barLeft: CGFloat = 5.9
+        static let barRight: CGFloat = 10.6
+        static let barHeight: CGFloat = 1.7
+        static let barGap: CGFloat = 0.95
+        static let barRadius: CGFloat = 0.4
+
+        static let dotRadius: CGFloat = 1.5
+        /// Enough of a gap that a dot on the stem reads as a dot, not enough to
+        /// take the stem's corner away with it.
+        static let dotRing: CGFloat = 0.5
+        /// Top-left, overlapping the stem, and the second directly below it.
+        static let dotCentres = [CGPoint(x: 2.3, y: 15.3), CGPoint(x: 2.3, y: 11.7)]
 
         static var outline: NSBezierPath {
             let path = NSBezierPath()
-            path.windingRule = .nonZero
-            path.appendRect(CGRect(x: left, y: bottom, width: stroke, height: top - bottom))
-            path.append(lobe(left: left, right: upperRight, bottom: waist, top: top, reversed: false))
-            path.append(lobe(rect: upperCounter, reversed: true))
-            path.append(lobe(left: left, right: lowerRight, bottom: bottom, top: waist, reversed: false))
-            path.append(lobe(rect: lowerCounter, reversed: true))
-            return path
-        }
-
-        static var counters: NSBezierPath {
-            let path = NSBezierPath()
-            path.append(lobe(rect: upperCounter, reversed: false))
-            path.append(lobe(rect: lowerCounter, reversed: false))
-            return path
-        }
-
-        /// Four bars, two per counter, filling from the bottom. Each spans the
-        /// full canvas width and is clipped to the counters, so the lower pair
-        /// come out longer — the gauge widens as it fills, like the letter does.
-        static var bars: [CGRect] {
-            [
-                bar(in: lowerCounter, index: 0, of: 2),
-                bar(in: lowerCounter, index: 1, of: 2),
-                bar(in: upperCounter, index: 0, of: 2),
-                bar(in: upperCounter, index: 1, of: 2),
-            ]
-        }
-
-        private static func bar(in counter: CGRect, index: Int, of count: Int) -> CGRect {
-            let gap: CGFloat = 1.0
-            let height = (counter.height - gap * CGFloat(count - 1)) / CGFloat(count)
-            return CGRect(
-                x: 0, y: counter.minY + (height + gap) * CGFloat(index),
-                width: size, height: height
-            )
-        }
-
-        private static func lobe(rect: CGRect, reversed: Bool) -> NSBezierPath {
-            lobe(left: rect.minX, right: rect.maxX, bottom: rect.minY, top: rect.maxY, reversed: reversed)
-        }
-
-        /// A "D": flat on the left, semicircular on the right. Wound
-        /// counter-clockwise unless `reversed`, which is what turns it into a
-        /// hole under the non-zero rule.
-        private static func lobe(left: CGFloat, right: CGFloat, bottom: CGFloat, top: CGFloat, reversed: Bool) -> NSBezierPath {
-            let path = NSBezierPath()
-            let radius = (top - bottom) / 2
-            let center = CGPoint(x: max(left, right - radius), y: (top + bottom) / 2)
-            if reversed {
-                path.move(to: CGPoint(x: left, y: top))
-                path.line(to: CGPoint(x: center.x, y: top))
-                path.appendArc(withCenter: center, radius: radius, startAngle: 90, endAngle: -90, clockwise: true)
-                path.line(to: CGPoint(x: left, y: bottom))
-            } else {
-                path.move(to: CGPoint(x: left, y: bottom))
-                path.line(to: CGPoint(x: center.x, y: bottom))
-                path.appendArc(withCenter: center, radius: radius, startAngle: -90, endAngle: 90, clockwise: false)
-                path.line(to: CGPoint(x: left, y: top))
-            }
+            path.move(to: CGPoint(x: stemX, y: bottomY))
+            path.line(to: CGPoint(x: stemX, y: topY))
+            path.line(to: CGPoint(x: topEdgeEnd, y: topY))
+            path.quarter(to: CGPoint(x: upperRight, y: (topY + waistY) / 2), corner: CGPoint(x: upperRight, y: topY))
+            path.quarter(to: CGPoint(x: waistX, y: waistY), corner: CGPoint(x: upperRight, y: waistY))
+            path.quarter(to: CGPoint(x: lowerRight, y: (waistY + bottomY) / 2), corner: CGPoint(x: lowerRight, y: waistY))
+            path.quarter(to: CGPoint(x: bottomEdgeEnd, y: bottomY), corner: CGPoint(x: lowerRight, y: bottomY))
             path.close()
+            path.lineWidth = stroke
+            path.lineJoinStyle = .round
+            path.lineCapStyle = .round
             return path
         }
+
+        /// Four bars of equal width and height, filling from the bottom, the
+        /// block centred in the hollow. Equal because the gauge reads as a
+        /// gauge; short of the lobes because nothing should need clipping.
+        static var bars: [CGRect] {
+            let block = barHeight * 4 + barGap * 3
+            let floor = bottomY + stroke / 2
+            let ceiling = topY - stroke / 2
+            let start = floor + (ceiling - floor - block) / 2
+            return (0..<4).map { index in
+                CGRect(
+                    x: barLeft, y: start + (barHeight + barGap) * CGFloat(index),
+                    width: barRight - barLeft, height: barHeight
+                )
+            }
+        }
+    }
+}
+
+extension NSBezierPath {
+    /// One quarter of an ellipse as a single cubic. `corner` is where the two
+    /// tangents meet — the square corner the arc bulges into.
+    fileprivate func quarter(to end: CGPoint, corner: CGPoint) {
+        let bulge: CGFloat = 0.5523
+        let start = currentPoint
+        curve(
+            to: end,
+            controlPoint1: CGPoint(x: start.x + (corner.x - start.x) * bulge, y: start.y + (corner.y - start.y) * bulge),
+            controlPoint2: CGPoint(x: end.x + (corner.x - end.x) * bulge, y: end.y + (corner.y - end.y) * bulge)
+        )
+    }
+
+    fileprivate convenience init(circleAt centre: CGPoint, radius: CGFloat) {
+        self.init(ovalIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2))
     }
 }
 
@@ -183,9 +189,28 @@ extension MicBadgeIcon.Kind {
         return false
     }
 
+    var level: UInt8? {
+        if case .level(let level, _) = self { return level }
+        return nil
+    }
+
+    var onlineCount: Int {
+        if case .level(_, let online) = self { return max(0, online) }
+        return 0
+    }
+
+    /// A red bar or a green dot. Either means the image cannot be a template,
+    /// because a template image is alpha and nothing else. Level 0 draws no bar
+    /// at all, so there is nothing there to be red.
+    var isColoured: Bool {
+        guard let level else { return false }
+        return (level > 0 && level <= MicBadgeIcon.lowBatteryLevel) || onlineCount > 0
+    }
+
     var accessibilityDescription: String {
         switch self {
-        case .level(let level): "BOYA mic battery \(level) of 4"
+        case .level(let level, let online):
+            "BOYA mic battery \(level) of 4, \(online) transmitter\(online == 1 ? "" : "s") online"
         case .offline: "BOYA mic offline"
         case .disconnected: "BOYA receiver not connected"
         case .connecting: "BOYA receiver connecting"
@@ -200,35 +225,36 @@ extension MicBadgeIcon {
     static func writePreviews(to directory: URL) {
         struct Sample {
             let kind: Kind
-            let low: Bool
             let dark: Bool
             var name: String {
                 let base = switch kind {
-                case .level(let level): "level\(level)"
+                case .level(let level, let online): "level\(level)-online\(online)"
                 case .offline: "offline"
                 case .disconnected: "disconnected"
                 case .connecting: "connecting"
                 }
-                return "b-\(base)\(low ? "-low" : "")-\(dark ? "dark" : "light").png"
+                return "b-\(base)-\(dark ? "dark" : "light").png"
             }
         }
 
         var samples: [Sample] = []
         for dark in [true, false] {
             for level in UInt8(0)...4 {
-                samples.append(Sample(kind: .level(level), low: false, dark: dark))
+                samples.append(Sample(kind: .level(level, online: 1), dark: dark))
             }
-            samples.append(Sample(kind: .level(1), low: true, dark: dark))
-            samples.append(Sample(kind: .offline, low: false, dark: dark))
-            samples.append(Sample(kind: .disconnected, low: false, dark: dark))
-            samples.append(Sample(kind: .connecting, low: false, dark: dark))
+            samples.append(Sample(kind: .level(3, online: 2), dark: dark))
+            samples.append(Sample(kind: .level(1, online: 2), dark: dark))
+            samples.append(Sample(kind: .level(2, online: 0), dark: dark))
+            samples.append(Sample(kind: .offline, dark: dark))
+            samples.append(Sample(kind: .disconnected, dark: dark))
+            samples.append(Sample(kind: .connecting, dark: dark))
         }
 
         let scale: CGFloat = 8
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for sample in samples {
-                let badge = image(kind: sample.kind, lowBattery: sample.low, darkAppearance: sample.dark)
+                let badge = image(kind: sample.kind, darkAppearance: sample.dark)
                 // Rasterize before compositing — drawing a live handler-backed
                 // image inside another one distorts its coordinates.
                 guard let badgeData = badge.tiffRepresentation, let bitmap = NSImage(data: badgeData) else {
