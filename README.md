@@ -75,7 +75,7 @@ just app          # build the app bundle
 just probe        # handshake with the receiver and dump every attribute
 just icons        # render the menu bar icon in every state to /tmp
 just log          # follow the app's log stream
-swift test        # 124 tests, no hardware needed
+swift test        # 152 tests, no hardware needed
 ```
 
 Command-line flags (`swift run BoyaManager --…`):
@@ -103,5 +103,5 @@ an unclean session.
 
 ## Requirements
 
-macOS 15+, Apple silicon or Intel. Built with Swift 6.2, strict concurrency, no
+macOS 15+, Apple silicon. Built with Swift 6.2, strict concurrency, no
 third-party dependencies.

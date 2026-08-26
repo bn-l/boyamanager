@@ -285,6 +285,7 @@
 		2537B3627B5782FC724B4416 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Local Dev Signing";
 				COMBINE_HIDPI_IMAGES = YES;
@@ -296,6 +297,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.bn-l.boya-manager";
 				PRODUCT_NAME = BoyaManager;
 				SDKROOT = macosx;
@@ -307,6 +309,7 @@
 		57B87E11273A0174801BE29E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Local Dev Signing";
 				COMBINE_HIDPI_IMAGES = YES;
@@ -318,6 +321,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.bn-l.boya-manager";
 				PRODUCT_NAME = BoyaManager;
 				SDKROOT = macosx;

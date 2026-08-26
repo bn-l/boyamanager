@@ -25,6 +25,10 @@ targets:
         ENABLE_DEBUG_DYLIB: NO
         CODE_SIGN_IDENTITY: "Local Dev Signing"
         SWIFT_STRICT_CONCURRENCY: complete
+        # Apple silicon only. ARCHS_STANDARD would put an x86_64 slice in every
+        # Release build, and there is no Intel Mac here to test one on.
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
 
 schemes:
   BoyaManager:

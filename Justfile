@@ -10,12 +10,15 @@ app:
     @if [ -d build/BoyaManager.app ]; then trash build/BoyaManager.app; fi
     @cp -R .build/xcode/Build/Products/Debug/BoyaManager.app build/
 
-# Build release app bundle
+# Build release app bundle. Apple silicon only, deliberately — there is no
+# Intel Mac to test an x86_64 slice on, and shipping an untested one is worse
+# than not shipping it.
 app-release:
     @mkdir -p build
     xcodebuild -project BoyaManager.xcodeproj -scheme BoyaManager -configuration Release -destination 'platform=macOS,arch=arm64' -derivedDataPath .build/xcode -quiet
     @if [ -d build/BoyaManager.app ]; then trash build/BoyaManager.app; fi
     @cp -R .build/xcode/Build/Products/Release/BoyaManager.app build/
+    @lipo -info build/BoyaManager.app/Contents/MacOS/BoyaManager
 
 # Regenerate Xcode project from project.yml
 gen:
