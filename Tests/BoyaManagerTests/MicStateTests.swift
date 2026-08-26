@@ -5,17 +5,22 @@ import Testing
 @Suite("Mic state")
 @MainActor
 struct MicStateTests {
+    /// Async because the permission has to be read before anything can be
+    /// posted — which is the whole point of the seam.
     private func makeState(
         iconSource: Preferences.IconSource = .lowestOnline,
         lowBatteryThreshold: Int = 1,
-        notifications: Bool = true
-    ) -> MicState {
+        notifications: Bool = true,
+        centre: FakeNotificationCentre = FakeNotificationCentre(permission: .allowed)
+    ) async -> MicState {
         let defaults = UserDefaults(suiteName: "boya-manager-tests-\(UUID().uuidString)")!
         let preferences = Preferences(defaults: defaults)
         preferences.iconSource = iconSource
         preferences.lowBatteryThreshold = lowBatteryThreshold
         preferences.notificationsEnabled = notifications
-        return MicState(preferences: preferences)
+        let state = MicState(preferences: preferences, notifications: centre)
+        await state.refreshNotificationPermission()
+        return state
     }
 
     /// The captured `get_all`, with attributes overridden for the case at hand.
@@ -26,8 +31,8 @@ struct MicStateTests {
     }
 
     @Test("A real dump becomes the view state the popover shows")
-    func snapshotBecomesViewState() {
-        let state = makeState()
+    func snapshotBecomesViewState() async {
+        let state = await makeState()
 
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot()))
@@ -41,8 +46,8 @@ struct MicStateTests {
     }
 
     @Test("An offline transmitter shows no live battery even though the device kept the stale value")
-    func offlineTransmitterHidesBattery() {
-        let state = makeState()
+    func offlineTransmitterHidesBattery() async {
+        let state = await makeState()
 
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx1Online: 0, .tx1Battery: 3])))
@@ -52,8 +57,8 @@ struct MicStateTests {
     }
 
     @Test("An attribute the device did not report is unavailable and its control is disabled")
-    func absentAttributeIsUnavailable() {
-        let state = makeState()
+    func absentAttributeIsUnavailable() async {
+        let state = await makeState()
 
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot()))
@@ -65,8 +70,8 @@ struct MicStateTests {
     }
 
     @Test("Nothing is enabled while the receiver is not ready")
-    func nothingEnabledWhenNotReady() {
-        let state = makeState()
+    func nothingEnabledWhenNotReady() async {
+        let state = await makeState()
 
         state.apply(.snapshot(snapshot()))
 
@@ -95,14 +100,9 @@ struct MicStateTests {
             deviceEvents: deviceEvents,
             sleeper: Clock().sleeper()
         )
-        let state = makeState()
+        let state = await makeState()
         state.attach(to: session)
         let running = Task { await session.run() }
-        defer {
-            deviceContinuation.finish()
-            running.cancel()
-            Task { await session.shutdown() }
-        }
         deviceContinuation.yield(.arrived)
         #expect(await settle { state.connection.isReady && state.isAvailable(.noiseCancellation) })
 
@@ -113,11 +113,19 @@ struct MicStateTests {
         #expect(await settle { state.value(.noiseCancellation) == 1 })
         #expect(state.pendingWrites.isEmpty)
         #expect(state.isEnabled(.noiseCancellation))
+
+        // Awaited, not deferred into a detached task: a session torn down that
+        // way outlives its test and keeps running alongside the next one.
+        state.stop()
+        await session.shutdown()
+        deviceContinuation.finish()
+        running.cancel()
+        await running.value
     }
 
     @Test("The icon follows the lowest connected transmitter by default")
-    func iconFollowsLowestOnline() {
-        let state = makeState(iconSource: .lowestOnline, lowBatteryThreshold: 0)
+    func iconFollowsLowestOnline() async {
+        let state = await makeState(iconSource: .lowestOnline, lowBatteryThreshold: 0)
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx1Online: 1, .tx1Battery: 4, .tx2Online: 1, .tx2Battery: 2])))
@@ -126,8 +134,8 @@ struct MicStateTests {
     }
 
     @Test("The icon can be pinned to one transmitter")
-    func iconFollowsChosenTransmitter() {
-        let state = makeState(iconSource: .transmitter1, lowBatteryThreshold: 0)
+    func iconFollowsChosenTransmitter() async {
+        let state = await makeState(iconSource: .transmitter1, lowBatteryThreshold: 0)
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx1Online: 1, .tx1Battery: 4, .tx2Online: 1, .tx2Battery: 2])))
@@ -136,8 +144,8 @@ struct MicStateTests {
     }
 
     @Test("A pinned transmitter that is offline leaves the icon showing offline, not the other one")
-    func pinnedOfflineShowsOffline() {
-        let state = makeState(iconSource: .transmitter1)
+    func pinnedOfflineShowsOffline() async {
+        let state = await makeState(iconSource: .transmitter1)
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx1Online: 0, .tx2Online: 1, .tx2Battery: 3])))
@@ -146,8 +154,8 @@ struct MicStateTests {
     }
 
     @Test("Connection state drives the icon when there is nothing to report")
-    func iconTracksConnection() {
-        let state = makeState()
+    func iconTracksConnection() async {
+        let state = await makeState()
 
         state.apply(.state(.connecting(attempt: 1)))
         #expect(state.iconKind == .connecting)
@@ -163,21 +171,21 @@ struct MicStateTests {
     }
 
     @Test("Low battery is decided by the threshold, not by a fixed level")
-    func lowBatteryThreshold() {
-        let low = makeState(lowBatteryThreshold: 2)
+    func lowBatteryThreshold() async {
+        let low = await makeState(lowBatteryThreshold: 2)
         low.apply(.state(.ready))
         low.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 2])))
         #expect(low.isLowBattery)
 
-        let fine = makeState(lowBatteryThreshold: 1)
+        let fine = await makeState(lowBatteryThreshold: 1)
         fine.apply(.state(.ready))
         fine.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 2])))
         #expect(!fine.isLowBattery)
     }
 
     @Test("The low-battery notification fires once per online period, not once per poll")
-    func lowBatteryNotifiesOnce() {
-        let state = makeState(lowBatteryThreshold: 1)
+    func lowBatteryNotifiesOnce() async {
+        let state = await makeState(lowBatteryThreshold: 1)
         state.apply(.state(.ready))
         // Establish the transmitter as online and healthy first.
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
@@ -190,8 +198,8 @@ struct MicStateTests {
     }
 
     @Test("Going offline and back arms the low-battery notification again")
-    func lowBatteryRearmsAfterOfflinePeriod() {
-        let state = makeState(lowBatteryThreshold: 1)
+    func lowBatteryRearmsAfterOfflinePeriod() async {
+        let state = await makeState(lowBatteryThreshold: 1)
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 1])))
@@ -203,8 +211,8 @@ struct MicStateTests {
     }
 
     @Test("A transmitter connecting or disconnecting is announced once per transition")
-    func presenceNotifications() {
-        let state = makeState()
+    func presenceNotifications() async {
+        let state = await makeState()
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx2Online: 0])))
 
@@ -215,8 +223,8 @@ struct MicStateTests {
     }
 
     @Test("The first snapshot is not announced as a transition — nothing changed yet")
-    func firstSnapshotIsNotATransition() {
-        let state = makeState()
+    func firstSnapshotIsNotATransition() async {
+        let state = await makeState()
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 4])))
@@ -224,9 +232,62 @@ struct MicStateTests {
         #expect(!state.notificationLog.contains { $0.contains("connected") })
     }
 
+    /// Authorization was requested per notification and, on refusal, the error
+    /// was logged and the content dropped — every time, forever. On this Mac
+    /// the very first notification the app ever produced was lost that way.
+    @Test("A refused permission stops the app handing anything to the centre")
+    func deniedNotificationsAreNotPosted() async {
+        let centre = FakeNotificationCentre(permission: .denied)
+        let state = await makeState(centre: centre)
+        state.apply(.state(.ready))
+        state.apply(.snapshot(snapshot([.tx2Online: 0])))
+
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 4])))
+
+        #expect(state.notificationPermission == .denied)
+        #expect(centre.posted.isEmpty, "a refusal stands until the user changes it in System Settings")
+        #expect(state.notificationLog.isEmpty)
+    }
+
+    @Test("An allowed centre is handed the notification")
+    func allowedNotificationsArePosted() async {
+        let centre = FakeNotificationCentre(permission: .allowed)
+        let state = await makeState(centre: centre)
+        state.apply(.state(.ready))
+        state.apply(.snapshot(snapshot([.tx2Online: 0])))
+
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 4])))
+
+        #expect(await settle { centre.posted.count { $0.contains("Transmitter 2 connected") } == 1 })
+    }
+
+    @Test("Authorization is asked for when notifications are switched on, and only once")
+    func permissionIsRequestedOnce() async {
+        let centre = FakeNotificationCentre(permission: .undetermined)
+        let state = await makeState(centre: centre)
+
+        await state.enableNotifications()
+        await state.enableNotifications()
+
+        #expect(centre.requestCount == 1, "the system only answers once; asking again does nothing")
+        #expect(state.notificationPermission == .allowed)
+    }
+
+    @Test("Permission revoked in System Settings is picked up on the next look")
+    func revokedPermissionIsNoticed() async {
+        let centre = FakeNotificationCentre(permission: .allowed)
+        let state = await makeState(centre: centre)
+        #expect(state.notificationPermission == .allowed)
+
+        centre.current = .denied
+        await state.refreshNotificationPermission()
+
+        #expect(state.notificationPermission == .denied)
+    }
+
     @Test("Notifications are silent when switched off")
-    func notificationsCanBeDisabled() {
-        let state = makeState(lowBatteryThreshold: 1, notifications: false)
+    func notificationsCanBeDisabled() async {
+        let state = await makeState(lowBatteryThreshold: 1, notifications: false)
         state.apply(.state(.ready))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
 
@@ -236,12 +297,12 @@ struct MicStateTests {
     }
 
     @Test("The receiver disconnecting is announced only after it had been connected")
-    func receiverDisconnectNotification() {
-        let fresh = makeState()
+    func receiverDisconnectNotification() async {
+        let fresh = await makeState()
         fresh.apply(.state(.failed(.claimFailed)))
         #expect(fresh.notificationLog.isEmpty, "a receiver that was never there did not disconnect")
 
-        let connected = makeState()
+        let connected = await makeState()
         connected.apply(.state(.ready))
         connected.apply(.state(.failed(.unresponsive)))
         #expect(connected.notificationLog.count { $0.contains("receiver disconnected") } == 1)
@@ -250,8 +311,8 @@ struct MicStateTests {
     /// `lastError` used to be written and never read: a timed-out or refused
     /// write re-enabled the control at the old value and said nothing at all.
     @Test("A failed write is shown under the controls, and cleared by the next good poll")
-    func writeFailureIsVisible() {
-        let state = makeState()
+    func writeFailureIsVisible() async {
+        let state = await makeState()
         state.apply(.state(.ready))
 
         state.apply(.writeResult(.rxGain, .failure(.outOfRange(9, 1...6))))
@@ -264,8 +325,8 @@ struct MicStateTests {
     }
 
     @Test("A connection problem is not repeated under the controls — the status line says it")
-    func connectionProblemIsNotAWriteError() {
-        let state = makeState()
+    func connectionProblemIsNotAWriteError() async {
+        let state = await makeState()
         state.apply(.state(.ready))
 
         state.apply(.state(.failed(.unresponsive)))
@@ -278,8 +339,8 @@ struct MicStateTests {
     /// "online" transmitter with bars while the footer said "No receiver
     /// connected".
     @Test("Losing the receiver clears everything that looked live")
-    func losingTheReceiverClearsLiveData() {
-        let state = makeState()
+    func losingTheReceiverClearsLiveData() async {
+        let state = await makeState()
         state.apply(.state(.ready))
         state.apply(.identified(DeviceIdentity()))
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
@@ -298,13 +359,13 @@ struct MicStateTests {
     /// disconnection of all — an unplug, which goes straight to idle — was
     /// never announced.
     @Test("The receiver going away is announced exactly once, whatever route it takes")
-    func disconnectAnnouncedOnce() {
-        let unplugged = makeState()
+    func disconnectAnnouncedOnce() async {
+        let unplugged = await makeState()
         unplugged.apply(.state(.ready))
         unplugged.apply(.state(.idle))
         #expect(unplugged.notificationLog.count { $0.contains("receiver disconnected") } == 1)
 
-        let viaRetry = makeState()
+        let viaRetry = await makeState()
         viaRetry.apply(.state(.ready))
         viaRetry.apply(.state(.waitingToRetry(reason: .transport, attempt: 1, seconds: 1)))
         viaRetry.apply(.state(.idle))
@@ -313,8 +374,8 @@ struct MicStateTests {
     }
 
     @Test("The status line says what is happening in each state")
-    func statusLine() {
-        let state = makeState()
+    func statusLine() async {
+        let state = await makeState()
 
         state.apply(.state(.idle))
         #expect(state.statusLine == "No receiver connected")
@@ -330,8 +391,8 @@ struct MicStateTests {
     }
 
     @Test("The tooltip names the battery level and the receiver")
-    func tooltip() {
-        let state = makeState(lowBatteryThreshold: 0)
+    func tooltip() async {
+        let state = await makeState(lowBatteryThreshold: 0)
         state.apply(.state(.ready))
 
         state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
@@ -339,4 +400,34 @@ struct MicStateTests {
         #expect(state.tooltip.contains("battery 3 of 4"))
         #expect(state.tooltip.contains("Receiver 4 of 4"))
     }
+}
+
+/// The notification centre, without a bundle or a user behind it.
+@MainActor
+final class FakeNotificationCentre: NotificationCentre {
+    /// What the system currently says. Settable so a test can revoke consent
+    /// the way System Settings does, behind the app's back.
+    var current: NotificationPermission
+    /// What `requestPermission()` produces.
+    var answersRequestWith: NotificationPermission
+    private(set) var requestCount = 0
+    private(set) var posted: [String] = []
+    private(set) var openedSettings = 0
+
+    init(permission: NotificationPermission, answersRequestWith: NotificationPermission = .allowed) {
+        current = permission
+        self.answersRequestWith = answersRequestWith
+    }
+
+    func permission() async -> NotificationPermission { current }
+
+    func requestPermission() async -> NotificationPermission {
+        requestCount += 1
+        current = answersRequestWith
+        return current
+    }
+
+    func post(title: String, body: String) async { posted.append(title) }
+
+    func openSystemSettings() { openedSettings += 1 }
 }

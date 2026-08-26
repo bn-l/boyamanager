@@ -53,6 +53,22 @@ private struct GeneralSettings: View {
 
             Section("Notifications") {
                 Toggle("Show notifications", isOn: $preferences.notificationsEnabled)
+                    .onChange(of: preferences.notificationsEnabled) { _, enabled in
+                        guard enabled else { return }
+                        Task { await state.enableNotifications() }
+                    }
+                // Switching the toggle on cannot override a refusal, and the
+                // app has no way to ask again once it has been made.
+                if state.notificationPermission == .denied {
+                    LabeledContent("") {
+                        HStack {
+                            Text("Notifications are turned off for BoyaManager in System Settings.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Open…") { state.openNotificationSettings() }
+                        }
+                    }
+                }
                 Toggle("Transmitter battery is low", isOn: $preferences.notifyLowBattery)
                     .disabled(!preferences.notificationsEnabled)
                 Toggle("A transmitter connects or disconnects", isOn: $preferences.notifyTransmitterPresence)
@@ -75,9 +91,10 @@ private struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
-        // The login item can be revoked in System Settings while the app runs
+        // Both of these can be revoked in System Settings while the app runs,
         // and nothing tells the app about it.
         .onAppear { preferences.refreshLoginItem() }
+        .task { await state.refreshNotificationPermission() }
     }
 }
 

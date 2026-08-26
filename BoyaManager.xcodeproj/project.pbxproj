@@ -20,6 +20,7 @@
 		A7B4111A2AC729F57F219D21 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE582BEC3D74E2A8D90ABCFB /* Preferences.swift */; };
 		B639D8EB8F21473344EC506F /* DeviceWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BED09E0636ED29D9B9E6FD4 /* DeviceWatcher.swift */; };
 		BECF3D8EB88900FDEE3F8F11 /* CFDLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE9A513D1B2C9D4F620D3FA4 /* CFDLink.swift */; };
+		C55F0DD2E1F83DB7A61F2760 /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA419E7B413E9BAD556FE484 /* Notifications.swift */; };
 		C80F56D5FCE069C429A197F4 /* Attributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05A54BBB807FC5EE33DC1B9B /* Attributes.swift */; };
 		CA561BE6015A5C4B9DA4D98D /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2200797B709456A0E39E45B7 /* Components.swift */; };
 		D514F6E5B47B9335F0E14EFF /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1BD83580A9A5DA2A5BA9BE /* App.swift */; };
@@ -41,6 +42,7 @@
 		9AD34CAA54F17210CBF4D6A2 /* UIPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIPreview.swift; sourceTree = "<group>"; };
 		9E945A82092D8BA0F799AC2D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A180DE705260C9218251EADF /* ReceiverSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiverSession.swift; sourceTree = "<group>"; };
+		AA419E7B413E9BAD556FE484 /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
 		AE1BD83580A9A5DA2A5BA9BE /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		CE9A513D1B2C9D4F620D3FA4 /* CFDLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CFDLink.swift; sourceTree = "<group>"; };
 		DE582BEC3D74E2A8D90ABCFB /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
@@ -108,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				60AAF92E59D39B802BEC6DBB /* MicState.swift */,
+				AA419E7B413E9BAD556FE484 /* Notifications.swift */,
 				DE582BEC3D74E2A8D90ABCFB /* Preferences.swift */,
 			);
 			path = Model;
@@ -212,6 +215,7 @@
 				39FDAEE1BE3554E0083E51A6 /* IAP2Link.swift in Sources */,
 				D7F6E09BA16B3B379C9ED80F /* MicBadgeIcon.swift in Sources */,
 				A009AA4E043A25B9D6E7C644 /* MicState.swift in Sources */,
+				C55F0DD2E1F83DB7A61F2760 /* Notifications.swift in Sources */,
 				674E7BA64969D5410DF43A40 /* PopoverView.swift in Sources */,
 				A7B4111A2AC729F57F219D21 /* Preferences.swift in Sources */,
 				2A0FACE5E434B1046D00B23A /* Probe.swift in Sources */,

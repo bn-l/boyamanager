@@ -296,13 +296,23 @@ actor ReceiverSession {
     /// The three loops that make up a live session. The first one to fail wins
     /// and its reason becomes the failure; the rest are cancelled with it.
     private func runReady(link: any AccessoryLink) async -> FailureKind? {
-        await withTaskGroup(of: FailureKind?.self) { group in
+        let first = await withTaskGroup(of: FailureKind?.self) { group in
             group.addTask { await self.pump(link: link) }
             group.addTask { await self.heartbeatLoop(link: link) }
             group.addTask { await self.pollLoop(link: link) }
             let first = await group.next() ?? nil
             group.cancelAll()
             return first
+        }
+        // Whichever loop noticed first, the link's own account of why it ended
+        // is the authoritative one. A heartbeat failing with `notLinked` is a
+        // symptom of the unplug, not a transport fault of its own, and letting
+        // it win put a retry countdown on screen for a device that had been
+        // pulled out.
+        switch await link.end {
+        case .reset: return .reset
+        case .deviceRemoved: return .deviceRemoved
+        case .transportEnded, .closed, .none: return first
         }
     }
 

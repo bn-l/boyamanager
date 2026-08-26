@@ -1,6 +1,5 @@
 import Foundation
 import OSLog
-import UserNotifications
 
 private let logger = Logger(subsystem: BoyaLog.subsystem, category: "UI")
 
@@ -19,8 +18,12 @@ final class MicState {
     /// Titles of the notifications posted this run, newest last. Kept so the
     /// "once per online period" rules are visible in the log and testable.
     private(set) var notificationLog: [String] = []
+    /// What the system allows, as of the last look. Settings shows a way out
+    /// when it is `.denied`.
+    private(set) var notificationPermission: NotificationPermission = .undetermined
 
     private let preferences: Preferences
+    private let notifications: any NotificationCentre
     private var session: ReceiverSession?
     private var eventTask: Task<Void, Never>?
 
@@ -30,8 +33,9 @@ final class MicState {
     private var lastPresenceNotice: [Int: Date] = [:]
     private var wasEverReady = false
 
-    init(preferences: Preferences) {
+    init(preferences: Preferences, notifications: any NotificationCentre = SystemNotificationCentre()) {
         self.preferences = preferences
+        self.notifications = notifications
     }
 
     func attach(to session: ReceiverSession) {
@@ -264,27 +268,35 @@ final class MicState {
 
     private func notify(title: String, body: String) {
         guard preferences.notificationsEnabled else { return }
-        notificationLog.append(title)
-        // UNUserNotificationCenter needs a real bundle; a bare `swift run`
-        // executable has none and would trap rather than fail.
-        guard Bundle.main.bundleIdentifier != nil else {
-            logger.info("Notification skipped (unbundled): \(title, privacy: .public)")
+        guard notificationPermission == .allowed else {
+            logger.info("Notification not shown (\(String(describing: self.notificationPermission), privacy: .public)): \(title, privacy: .public)")
             return
         }
-        logger.notice("Notification: \(title, privacy: .public)")
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        let center = UNUserNotificationCenter.current()
-        Task {
-            do {
-                _ = try await center.requestAuthorization(options: [.alert, .sound])
-                try await center.add(request)
-            } catch {
-                logger.error("Notification failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        notificationLog.append(title)
+        Task { await notifications.post(title: title, body: body) }
+    }
+
+    // MARK: - notification permission
+
+    /// Reads what the system currently allows. Asking per notification, which
+    /// is what this used to do, meant a refusal was rediscovered and logged on
+    /// every single event and the content thrown away each time.
+    func refreshNotificationPermission() async {
+        notificationPermission = await notifications.permission()
+    }
+
+    /// Asks, once, when the user switches notifications on — which is a moment
+    /// they are expecting to be asked. Asking on the first event instead put
+    /// the prompt at an arbitrary point, and a prompt that is missed leaves
+    /// every notification after it silently dropped.
+    func enableNotifications() async {
+        notificationPermission = notificationPermission == .undetermined
+            ? await notifications.requestPermission()
+            : await notifications.permission()
+    }
+
+    func openNotificationSettings() {
+        notifications.openSystemSettings()
     }
 }
 
