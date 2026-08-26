@@ -146,7 +146,6 @@ struct SessionHarness {
         makeLink: @escaping ReceiverSession.LinkFactory,
         policy: ReconnectPolicy = ReconnectPolicy(),
         timings: ReceiverSession.Timings = ReceiverSession.Timings(),
-        pollInterval: Duration = .seconds(1),
         clock: Clock = Clock()
     ) async {
         let (events, continuation) = AsyncStream.makeStream(of: DeviceEvent.self)
@@ -156,7 +155,6 @@ struct SessionHarness {
             makeLink: makeLink,
             deviceEvents: events,
             policy: policy,
-            pollInterval: pollInterval,
             timings: timings,
             sleeper: clock.sleeper()
         )

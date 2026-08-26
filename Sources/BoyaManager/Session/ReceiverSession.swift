@@ -58,7 +58,6 @@ actor ReceiverSession {
     private let policy: ReconnectPolicy
     private let sleeper: Sleeper
     private let timings: Timings
-    private var pollInterval: Duration
 
     /// Every delay the session takes, in one place. All of them go through
     /// `sleeper`, so a test can drive the whole state machine — backoff
@@ -80,6 +79,18 @@ actor ReceiverSession {
         /// re-enumerating itself, not two events.
         var deviceDebounce: Duration = .seconds(1)
         var warmUpTick: Duration = .milliseconds(100)
+        /// Polling cadence. Fast while someone is looking at the popover or has
+        /// just changed something, slow the rest of the time. The data is 0…4
+        /// bar levels and `tx*_online` takes the device three seconds to update
+        /// anyway, so a second is as fine-grained as it is ever worth being.
+        var fastPoll: Duration = .seconds(1)
+        var idlePoll: Duration = .seconds(10)
+        /// How long a write keeps the fast cadence.
+        var attentionSpan: Duration = .seconds(5)
+        /// The device beats about every 500 ms. Silence for this long is a dead
+        /// link, and it says so seconds before three poll timeouts would —
+        /// without tying how fresh the data is to how fast a failure is noticed.
+        var heartbeatTimeout: Duration = .seconds(3)
     }
 
     private let eventStream: AsyncStream<SessionEvent>
@@ -95,8 +106,12 @@ actor ReceiverSession {
     private var snapshot = AttributeSnapshot()
     private var startInstant = ContinuousClock.now
     private var answeredDeviceHeartbeat = false
+    private var deviceHeartbeats = 0
     private var consecutiveTimeouts = 0
     private var nextRequestID: UInt64 = 0
+    private var isPopoverVisible = false
+    private var isDisplayAsleep = false
+    private var lastWrite: ContinuousClock.Instant?
 
     private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingRequest: PendingRequest?
@@ -131,17 +146,25 @@ actor ReceiverSession {
         makeLink: @escaping LinkFactory,
         deviceEvents: AsyncStream<DeviceEvent>,
         policy: ReconnectPolicy = ReconnectPolicy(),
-        pollInterval: Duration = .seconds(2),
         timings: Timings = Timings(),
         sleeper: @escaping Sleeper = { try await Task.sleep(for: $0) }
     ) {
         self.makeLink = makeLink
         self.deviceEvents = deviceEvents
         self.policy = policy
-        self.pollInterval = pollInterval
         self.timings = timings
         self.sleeper = sleeper
         (eventStream, eventContinuation) = AsyncStream.makeStream(of: SessionEvent.self)
+    }
+
+    /// How long to wait before the next poll. Nobody is reading a menu bar icon
+    /// ten times a minute unless they have opened the popover or just changed
+    /// something, and nobody at all is reading it while the display is off.
+    private var pollInterval: Duration {
+        guard !isDisplayAsleep else { return timings.idlePoll }
+        guard !isPopoverVisible else { return timings.fastPoll }
+        guard let lastWrite, ContinuousClock.now - lastWrite < timings.attentionSpan else { return timings.idlePoll }
+        return timings.fastPoll
     }
 
     nonisolated var events: AsyncStream<SessionEvent> { eventStream }
@@ -246,9 +269,21 @@ actor ReceiverSession {
         }
     }
 
-    func setPollInterval(_ interval: Duration) {
-        pollInterval = interval
-        logger.info("Poll interval now \(Int(interval.components.seconds), privacy: .public)s")
+    /// The popover appearing is the strongest signal that somebody wants
+    /// current numbers, and its disappearing that nobody does.
+    func setPopoverVisible(_ visible: Bool) async {
+        isPopoverVisible = visible
+        logger.info("Popover \(visible ? "open" : "closed", privacy: .public) — polling every \(self.pollInterval.milliseconds, privacy: .public)ms")
+        guard visible else { return }
+        await pollNow()
+    }
+
+    func setDisplayAsleep(_ asleep: Bool) async {
+        guard asleep != isDisplayAsleep else { return }
+        isDisplayAsleep = asleep
+        logger.info("Display \(asleep ? "asleep — polling paused" : "awake", privacy: .public)")
+        guard !asleep else { return }
+        await pollNow()
     }
 
     func shutdown() async {
@@ -299,6 +334,7 @@ actor ReceiverSession {
         let first = await withTaskGroup(of: FailureKind?.self) { group in
             group.addTask { await self.pump(link: link) }
             group.addTask { await self.heartbeatLoop(link: link) }
+            group.addTask { await self.heartbeatWatchdog() }
             group.addTask { await self.pollLoop(link: link) }
             let first = await group.next() ?? nil
             group.cancelAll()
@@ -319,8 +355,26 @@ actor ReceiverSession {
     private func resetForNewSession() {
         startInstant = .now
         answeredDeviceHeartbeat = false
+        deviceHeartbeats = 0
         consecutiveTimeouts = 0
         snapshot = AttributeSnapshot()
+    }
+
+    /// The liveness check. Counting device heartbeats rather than watching a
+    /// clock keeps it on whatever clock the session is running on, and covers
+    /// a receiver that never starts beating as well as one that stops.
+    private func heartbeatWatchdog() async -> FailureKind? {
+        var silence = Duration.zero
+        while !Task.isCancelled {
+            let seen = deviceHeartbeats
+            guard (try? await sleeper(timings.heartbeat)) != nil else { return nil }
+            silence = deviceHeartbeats > seen ? .zero : silence + timings.heartbeat
+            guard silence < timings.heartbeatTimeout else {
+                logger.error("No device heartbeat for \(silence.milliseconds, privacy: .public)ms — the link is dead")
+                return .unresponsive
+            }
+        }
+        return nil
     }
 
     /// Reads the EA stream, rebuilds CFD frames and dispatches them. Ends when
@@ -356,6 +410,7 @@ actor ReceiverSession {
                 logger.info("First device heartbeat from node (\(frame.node.chid, privacy: .public),\(frame.node.vid, privacy: .public),\(frame.node.pid, privacy: .public))")
             }
             answeredDeviceHeartbeat = true
+            deviceHeartbeats += 1
             let reply = CFDLink.encode(
                 message: .heartbeat,
                 payload: CFDLink.heartbeatPayload(tick: tick()),
@@ -410,6 +465,14 @@ actor ReceiverSession {
 
         var isFirst = true
         while !Task.isCancelled {
+            // Nothing on screen to keep current. The loop still ticks so it can
+            // notice the display coming back, which costs one wakeup a
+            // ten-second interval.
+            guard !isDisplayAsleep else {
+                guard (try? await sleeper(timings.idlePoll)) != nil else { return nil }
+                continue
+            }
+
             let issued = ContinuousClock.now
             let reply = try? await request(.getMany, payload: [0], node: .settings, link: link)
             if let reply {
@@ -424,9 +487,7 @@ actor ReceiverSession {
                     logger.notice("Warm-up: first reply after \((ContinuousClock.now - issued).milliseconds, privacy: .public)ms")
                     isFirst = false
                 }
-                let decoded = AttributeSnapshot(decoding: reply.payload)
-                snapshot = decoded
-                publish(.snapshot(decoded))
+                publishSnapshot(reply)
             } else {
                 consecutiveTimeouts += 1
                 logger.error("get_all timed out (\(self.consecutiveTimeouts, privacy: .public)/3)")
@@ -435,6 +496,21 @@ actor ReceiverSession {
             guard (try? await sleeper(pollInterval)) != nil else { return nil }
         }
         return nil
+    }
+
+    /// One poll outside the loop's cadence, for the moments when waiting out
+    /// the slow interval would show stale numbers to somebody who is looking.
+    /// Overlapping the loop is harmless: the request lock serialises them.
+    private func pollNow() async {
+        guard state.isReady, let link = currentLink, answeredDeviceHeartbeat else { return }
+        guard let reply = try? await request(.getMany, payload: [0], node: .settings, link: link) else { return }
+        publishSnapshot(reply)
+    }
+
+    private func publishSnapshot(_ reply: CFDFrame) {
+        let decoded = AttributeSnapshot(decoding: reply.payload)
+        snapshot = decoded
+        publish(.snapshot(decoded))
     }
 
     // MARK: - requests
@@ -605,6 +681,8 @@ actor ReceiverSession {
         }
 
         logger.notice("Set \(attr.name, privacy: .public) = \(value, privacy: .public)")
+        // Somebody is changing settings, so they are watching what happens.
+        lastWrite = .now
         _ = try? await request(.setAttribute, payload: [attr.rawValue, 1, value], node: .settings, link: link)
         guard let readBack = try? await request(.getAttribute, payload: [attr.rawValue], node: .settings, link: link) else {
             logger.error("No read-back for \(attr.name, privacy: .public)")

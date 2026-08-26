@@ -13,7 +13,6 @@ final class Preferences {
     private let defaults: UserDefaults
     private let loginItems: any LoginItemStore
 
-    var pollSeconds: Int { didSet { store(pollSeconds, .pollSeconds) } }
     var notificationsEnabled: Bool { didSet { store(notificationsEnabled, .notificationsEnabled) } }
     var notifyLowBattery: Bool { didSet { store(notifyLowBattery, .notifyLowBattery) } }
     var notifyTransmitterPresence: Bool { didSet { store(notifyTransmitterPresence, .notifyTransmitterPresence) } }
@@ -33,12 +32,9 @@ final class Preferences {
         set { apply(launchAtLogin: newValue) }
     }
 
-    static let pollChoices = [1, 2, 5]
-
     init(defaults: UserDefaults = .standard, loginItems: any LoginItemStore = AppLoginItem()) {
         self.defaults = defaults
         self.loginItems = loginItems
-        pollSeconds = defaults.object(forKey: Key.pollSeconds.rawValue) as? Int ?? 2
         notificationsEnabled = defaults.object(forKey: Key.notificationsEnabled.rawValue) as? Bool ?? true
         notifyLowBattery = defaults.object(forKey: Key.notifyLowBattery.rawValue) as? Bool ?? true
         notifyTransmitterPresence = defaults.object(forKey: Key.notifyTransmitterPresence.rawValue) as? Bool ?? true
@@ -46,10 +42,7 @@ final class Preferences {
         loginItem = loginItems.state
     }
 
-    var pollInterval: Duration { .seconds(pollSeconds) }
-
     private enum Key: String {
-        case pollSeconds
         case notificationsEnabled
         case notifyLowBattery
         case notifyTransmitterPresence

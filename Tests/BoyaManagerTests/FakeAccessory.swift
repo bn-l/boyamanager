@@ -62,6 +62,7 @@ actor FakeAccessory: ByteTransport {
     private var acknowledgesData = true
     private var isClosed = false
     private var isReset = false
+    private var beatsBack: Bool
     private(set) var wasTerminated = false
 
     /// Everything the host wrote, as parsed link packets — the transcript the
@@ -81,6 +82,7 @@ actor FakeAccessory: ByteTransport {
 
     init(options: Options = Options()) {
         self.options = options
+        beatsBack = options.heartbeatsBack
     }
 
     // MARK: - ByteTransport
@@ -165,6 +167,7 @@ actor FakeAccessory: ByteTransport {
     }
 
     private func acknowledge(_ seq: UInt8) {
+        guard acknowledgesData else { return }
         acknowledgedSeq = seq &+ options.acknowledgesAhead
         emit(LinkPacket(control: .ack, seq: accessorySeq, ack: acknowledgedSeq, session: 0).encode())
     }
@@ -208,7 +211,7 @@ actor FakeAccessory: ByteTransport {
                 sendFrames([Fixtures.echoedHostHeartbeat])
             }
             if frame.message == CFDMessage.heartbeat.rawValue {
-                if options.heartbeatsBack { sendFrames([Fixtures.nodeHeartbeat]) }
+                if beatsBack { sendFrames([Fixtures.nodeHeartbeat]) }
                 continue
             }
             guard options.answersRequests else { continue }
@@ -257,11 +260,16 @@ actor FakeAccessory: ByteTransport {
         emitData(session: 2, payload: payload, seq: nextAccessorySeq())
     }
 
-    /// Models the receiver going quiet — it stops acknowledging and stops
-    /// sending, which is what it really does for a second or so at a time when
-    /// it has nothing to say. Host frames are still received and recorded.
+    /// Models the receiver acknowledging lazily: it stops answering the host's
+    /// packets for a moment but keeps beating, which is what it really does.
+    /// Stopping the heartbeats too would be a dead link, not a quiet one — and
+    /// the session is entitled to tell them apart.
     func goQuiet() { acknowledgesData = false }
     func resume() { acknowledgesData = true }
+
+    /// A receiver that is still acknowledging but has stopped beating: alive at
+    /// the link layer, gone above it.
+    func stopHeartbeating() { beatsBack = false }
 
     /// RST: the accessory tears the link down and stops answering entirely.
     func resetLink() {
@@ -301,7 +309,7 @@ actor FakeAccessory: ByteTransport {
     }
 
     private func emit(_ bytes: [UInt8]) {
-        guard !isClosed, acknowledgesData else { return }
+        guard !isClosed else { return }
         continuation?.yield(bytes)
     }
 

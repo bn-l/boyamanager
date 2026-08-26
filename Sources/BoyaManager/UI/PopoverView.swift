@@ -19,6 +19,11 @@ struct PopoverView: View {
         }
         .padding(14)
         .frame(width: popoverWidth)
+        // `MenuBarExtra` has no open/close callback, so the window's own
+        // lifetime is the signal. Someone looking at it is the only reason to
+        // poll every second.
+        .onAppear { state.setPopoverVisible(true) }
+        .onDisappear { state.setPopoverVisible(false) }
     }
 
     private var header: some View {

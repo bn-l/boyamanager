@@ -12,7 +12,6 @@ struct ReceiverSessionTests {
         _ options: FakeAccessory.Options = .init(),
         policy: ReconnectPolicy = ReconnectPolicy(),
         timings: ReceiverSession.Timings = ReceiverSession.Timings(),
-        pollInterval: Duration = .seconds(1),
         clock: Clock = Clock(),
         linkSleeper: @escaping IAP2Link.Sleeper = Clock.linkSleeper,
         _ body: (SessionHarness, FakeAccessory) async throws -> Void
@@ -22,7 +21,6 @@ struct ReceiverSessionTests {
             makeLink: { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: linkSleeper) },
             policy: policy,
             timings: timings,
-            pollInterval: pollInterval,
             clock: clock
         )
         do {
@@ -40,6 +38,17 @@ struct ReceiverSessionTests {
 
     private nonisolated static func sawSnapshot(_ events: [SessionEvent]) -> Bool {
         events.contains { if case .snapshot = $0 { true } else { false } }
+    }
+
+    /// Polls `check` until it holds or the deadline passes — for the things the
+    /// recorder cannot see, like which delay the session asked its clock for.
+    private func settle(within timeout: Duration = .seconds(10), until check: () async -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await check() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return await check()
     }
 
     @Test("An arriving device is taken all the way to ready")
@@ -274,8 +283,12 @@ struct ReceiverSessionTests {
         // so `requested` is the backoff schedule and nothing else.
         try await withHarness(
             .init(answersRequests: false),
-            timings: ReceiverSession.Timings(request: .milliseconds(400), deviceDebounce: .milliseconds(50)),
-            pollInterval: .milliseconds(200),
+            timings: ReceiverSession.Timings(
+                request: .milliseconds(400),
+                deviceDebounce: .milliseconds(50),
+                fastPoll: .milliseconds(200),
+                idlePoll: .milliseconds(200)
+            ),
             clock: clock
         ) { harness, _ in
             harness.send(.arrived)
@@ -400,6 +413,102 @@ struct ReceiverSessionTests {
             }
             let states = await harness.recorder.states
             #expect(diagnosed, "an RST should be diagnosed as a reset; states were \(states)")
+        }
+    }
+
+    /// Liveness used to be inferred from three poll timeouts, which tied how
+    /// fresh the data is to how fast a dead link is noticed. The device beats
+    /// twice a second; silence is the cheaper and faster signal.
+    @Test("A receiver that acknowledges but stops beating is treated as dead")
+    func silenceIsADeadLink() async throws {
+        try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, accessory in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+
+            await accessory.stopHeartbeating()
+
+            #expect(await harness.recorder.wait(timeout: .seconds(20)) { events in
+                events.contains {
+                    if case .state(.waitingToRetry(.unresponsive, _, _)) = $0 { true } else { false }
+                }
+            }, "a link with no heartbeats on it is dead, whatever its acknowledgements say")
+        }
+    }
+
+    @Test("Polling is quick while the popover is open and slow when it is not")
+    func pollIntervalFollowsAttention() async throws {
+        // Above the 500 ms heartbeat and the 100 ms warm-up tick, below both
+        // poll intervals, so `requested` is the cadence and nothing else. The
+        // device debounce is shortened out of the way for the same reason: it
+        // is a second, which is also the fast cadence.
+        let clock = Clock(ignoringBelow: .milliseconds(900))
+        try await withHarness(
+            timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50)),
+            clock: clock
+        ) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await settle { await clock.requested.contains(.seconds(10)) },
+                    "nobody is looking, so the loop should be waiting out the slow interval")
+
+            await harness.session.setPopoverVisible(true)
+
+            #expect(await settle { await clock.requested.contains(.seconds(1)) },
+                    "opening the popover should drop the interval to a second")
+        }
+    }
+
+    /// A slow interval far longer than the assertion window, so "polled at
+    /// once" cannot be confused with "the loop came round again".
+    private static let slowPolling = ReceiverSession.Timings(
+        deviceDebounce: .milliseconds(50),
+        idlePoll: .seconds(120)
+    )
+
+    @Test("Opening the popover polls at once rather than waiting out the slow interval")
+    func popoverPollsImmediately() async throws {
+        try await withHarness(timings: Self.slowPolling) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            let before = await harness.recorder.snapshots.count
+
+            await harness.session.setPopoverVisible(true)
+
+            #expect(await harness.recorder.wait(timeout: .seconds(3)) { events in
+                events.count { if case .snapshot = $0 { true } else { false } } > before
+            }, "the popover should not have to wait out an interval for its first numbers")
+        }
+    }
+
+    @Test("A sleeping display stops the polling")
+    func displaySleepPausesPolling() async throws {
+        // A short interval, so several of them pass inside the assertion — if
+        // polling carried on, it would show.
+        try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50), idlePoll: .seconds(2))) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+
+            await harness.session.setDisplayAsleep(true)
+            let asleep = await harness.recorder.snapshots.count
+            try await Task.sleep(for: .seconds(1))
+
+            #expect(await harness.recorder.snapshots.count == asleep, "nothing on screen, nothing to poll for")
+        }
+    }
+
+    @Test("Waking the display polls at once rather than waiting out the interval")
+    func displayWakePollsImmediately() async throws {
+        try await withHarness(timings: Self.slowPolling) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            await harness.session.setDisplayAsleep(true)
+            let asleep = await harness.recorder.snapshots.count
+
+            await harness.session.setDisplayAsleep(false)
+
+            #expect(await harness.recorder.wait(timeout: .seconds(3)) { events in
+                events.count { if case .snapshot = $0 { true } else { false } } > asleep
+            }, "waking should not wait out an interval")
         }
     }
 

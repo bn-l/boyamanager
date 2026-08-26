@@ -14,7 +14,6 @@ struct PreferencesTests {
     func defaults() {
         let preferences = Preferences(defaults: scratchDefaults())
 
-        #expect(preferences.pollSeconds == 2)
         #expect(preferences.notificationsEnabled)
         #expect(preferences.notifyLowBattery)
         #expect(preferences.notifyTransmitterPresence)
@@ -26,14 +25,12 @@ struct PreferencesTests {
         let defaults = scratchDefaults()
         let first = Preferences(defaults: defaults)
 
-        first.pollSeconds = 5
         first.notificationsEnabled = false
         first.notifyLowBattery = false
         first.notifyTransmitterPresence = false
         first.notifyReceiverDisconnected = false
 
         let second = Preferences(defaults: defaults)
-        #expect(second.pollSeconds == 5)
         #expect(!second.notificationsEnabled)
         #expect(!second.notifyLowBattery)
         #expect(!second.notifyTransmitterPresence)
@@ -51,18 +48,9 @@ struct PreferencesTests {
     @Test("A nonsense stored value falls back rather than crashing")
     func unknownStoredValue() {
         let defaults = scratchDefaults()
-        defaults.set("somethingElse", forKey: "pollSeconds")
+        defaults.set("somethingElse", forKey: "notifyLowBattery")
 
-        #expect(Preferences(defaults: defaults).pollSeconds == 2)
-    }
-
-    @Test("The poll interval is the poll setting, as a Duration")
-    func pollInterval() {
-        let preferences = Preferences(defaults: scratchDefaults())
-
-        preferences.pollSeconds = 5
-
-        #expect(preferences.pollInterval == .seconds(5))
+        #expect(Preferences(defaults: defaults).notifyLowBattery)
     }
 
     @Test("Two preference objects on different domains do not see each other")
@@ -70,9 +58,9 @@ struct PreferencesTests {
         let first = Preferences(defaults: scratchDefaults())
         let second = Preferences(defaults: scratchDefaults())
 
-        first.pollSeconds = 5
+        first.notifyLowBattery = false
 
-        #expect(second.pollSeconds == 2)
+        #expect(second.notifyLowBattery)
     }
 
     /// `SMAppServiceStatusRequiresApproval` means registration worked but the
@@ -142,10 +130,6 @@ struct PreferencesTests {
         #expect(preferences.loginItem == .needsApproval)
     }
 
-    @Test("The offered choices are the ones the pickers show")
-    func choices() {
-        #expect(Preferences.pollChoices == [1, 2, 5])
-    }
 }
 
 /// The login-item registry, without the system daemon behind it.

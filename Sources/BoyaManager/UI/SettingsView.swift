@@ -39,10 +39,6 @@ private struct GeneralSettings: View {
                         }
                     }
                 }
-                Picker("Refresh every", selection: $preferences.pollSeconds) {
-                    ForEach(Preferences.pollChoices, id: \.self) { Text("\($0) seconds").tag($0) }
-                }
-                .onChange(of: preferences.pollSeconds) { state.applyPollInterval() }
             }
 
             Section("Notifications") {

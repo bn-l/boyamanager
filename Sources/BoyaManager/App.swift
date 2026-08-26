@@ -104,8 +104,7 @@ final class AppController {
 
         let session = ReceiverSession(
             makeLink: { IAP2Link(transport: try USBTransport()) },
-            deviceEvents: watcher.events,
-            pollInterval: preferences.pollInterval
+            deviceEvents: watcher.events
         )
         self.session = session
         state.attach(to: session)
@@ -121,6 +120,17 @@ final class AppController {
             forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main
         ) { _ in
             Task { @MainActor in await Shared.controller.session?.recheck() }
+        }
+        // Nothing is reading a menu bar icon on a display that is off.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in await Shared.controller.session?.setDisplayAsleep(true) }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in await Shared.controller.session?.setDisplayAsleep(false) }
         }
     }
 

@@ -74,10 +74,10 @@ final class MicState {
         Task { await session.retryNow() }
     }
 
-    func applyPollInterval() {
+    /// The popover being on screen is what makes fast polling worth its cost.
+    func setPopoverVisible(_ visible: Bool) {
         guard let session else { return }
-        let interval = preferences.pollInterval
-        Task { await session.setPollInterval(interval) }
+        Task { await session.setPopoverVisible(visible) }
     }
 
     // MARK: - event handling
