@@ -1,0 +1,35 @@
+name: BoyaManager
+options:
+  bundleIdPrefix: com.bn-l
+  deploymentTarget:
+    macOS: "15.0"
+  generateEmptyDirectories: false
+  createIntermediateGroups: true
+
+targets:
+  BoyaManager:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/BoyaManager
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bn-l.boya-manager
+        PRODUCT_NAME: BoyaManager
+        SWIFT_VERSION: "6.2"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        INFOPLIST_FILE: Info.plist
+        ENABLE_HARDENED_RUNTIME: YES
+        # The Xcode 16+ debug-dylib stub trips library validation under
+        # hardened runtime with a local signing identity.
+        ENABLE_DEBUG_DYLIB: NO
+        CODE_SIGN_IDENTITY: "Local Dev Signing"
+        SWIFT_STRICT_CONCURRENCY: complete
+
+schemes:
+  BoyaManager:
+    build:
+      targets:
+        BoyaManager: all
+    run:
+      executable: BoyaManager
