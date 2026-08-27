@@ -551,18 +551,23 @@ So `1` is input-only and `0` presents a second class-1 subclass-2 streaming inte
 which is what a host needs in order to send audio *to* the device. Adding an interface
 means re-enumerating, which is the restart.
 
-**Why BOYA calls it "speaker" is still unknown, and the obvious reading is wrong.** A
-mini 2 RX is a USB-C stub with no speaker and no jack, so there is nothing on the device
-for playback to come out of. What the attribute demonstrably controls is whether the
-receiver advertises a playback endpoint to the *host* — in USB audio terms an output
-terminal, which the spec's own terminal type for the common case is called Speaker. Note
-also that this device already has form for inverted flags: `tx*_online` reads `1` as
-online against BOYA's own label (§9.5).
+**The "speaker" in the name is the host's, not the receiver's.** BOYA's own FAQ for this
+model answers *"Does BOYA mini 2 support phone speaker playback?"* with "Yes", and the
+sibling BOYAMIC 2 FAQ spells out the mechanism: *"Yes. Enable / disable playback via the
+receiver or BOYA Central app."* That is this attribute. A USB audio device that publishes
+a playback endpoint takes over the host's output — which is exactly what macOS did here,
+making the new device the system default output — so **not** publishing one is what
+leaves the phone free to play through its own speaker.
 
-Open, and cheap to answer: where audio written to that endpoint actually goes. Play into
-it and listen — at the transmitters, in a recording, anywhere. It may be a monitor path,
-it may exist only so that conferencing apps which bind one device for both directions
-can select the receiver, or it may go nowhere at all.
+Hence `1` = phone speaker playback enabled, `0` = disabled, and the mini 2 ships at `1`.
+It also explains BOYA's manual warning to turn the phone's speaker off before recording:
+that is a write of `0`, and it exists to stop the phone's own output feeding back into
+the mics.
+
+Still open: where audio written to the endpoint at `0` actually comes out. A mini 2 RX is
+a USB-C stub with no speaker, so if it has no monitoring jack either, the answer may be
+"nowhere". Cheap to settle — set `0`, play something, and listen at the receiver and at
+the transmitters.
 
 Two things worth knowing before writing it. macOS made the new output device the
 **system default output** on its own (`coreaudio_default_audio_output_device`), so a

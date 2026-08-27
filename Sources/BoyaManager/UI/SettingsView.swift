@@ -185,11 +185,25 @@ struct AdvancedSettings: View {
             // — the device answers status 1 and the id is absent from its
             // metadata (PROTOCOL.md §9.6). A control that can only fail is
             // worse than no control.
-            Section("Speaker mode") {
-                Button(speakerButtonTitle) { confirming = .rxSpeaker }
-                    .disabled(!state.isEnabled(.rxSpeaker))
-                Text(Attr.rxSpeaker.riskWarning ?? "").font(.caption).foregroundStyle(.secondary)
-            }
+            //
+            // Speaker mode is parked, not deleted. What the write does is
+            // measured and certain (PROTOCOL.md §9.5): rx_speaker = 1 publishes
+            // one audio streaming interface and the host keeps its own output;
+            // 0 publishes a second one and the host routes playback into the
+            // receiver, which macOS then makes the system default output. What
+            // is *not* settled is what should be on the button. BOYA's own FAQ
+            // calls the feature "phone speaker playback", enabled or disabled
+            // from the app — which makes 1 = on and reads correctly on a phone;
+            // on a Mac "turn the speaker off" then produces a new speaker
+            // device, which reads like the opposite. Until somebody plays audio
+            // into that endpoint and finds out where it comes out, there is no
+            // wording here that is both short and true.
+            //
+            //  Section("Speaker mode") {
+            //      Button(speakerButtonTitle) { confirming = .rxSpeaker }
+            //          .disabled(!state.isEnabled(.rxSpeaker))
+            //      Text(Attr.rxSpeaker.riskWarning ?? "").font(.caption).foregroundStyle(.secondary)
+            //  }
 
             Section("Factory reset") {
                 Button("Reset the receiver…", role: .destructive) { confirming = .rxReset }
@@ -203,17 +217,10 @@ struct AdvancedSettings: View {
             isPresented: Binding(get: { confirming != nil && !confirmingReset }, set: { if !$0 { confirming = nil } }),
             titleVisibility: .visible
         ) {
-            if let attr = confirming {
-                Button(attr == .rxReset ? "Continue" : "Change", role: attr == .rxReset ? .destructive : nil) {
-                    if attr == .rxReset {
-                        confirmingReset = true
-                    } else {
-                        apply(attr)
-                        confirming = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) { confirming = nil }
-            }
+            // A factory reset is the only thing left that asks, and it asks
+            // twice — this is the first of the two.
+            Button("Continue", role: .destructive) { confirmingReset = true }
+            Button("Cancel", role: .cancel) { confirming = nil }
         } message: {
             Text(confirming?.riskWarning ?? "")
         }
@@ -228,16 +235,19 @@ struct AdvancedSettings: View {
         }
     }
 
-    private var speakerButtonTitle: String {
-        (state.value(.rxSpeaker) ?? 0) != 0 ? "Turn the speaker off…" : "Turn the speaker on…"
-    }
-
-    private func apply(_ attr: Attr) {
-        switch attr {
-        case .rxSpeaker: state.setRisky(.rxSpeaker, to: (state.value(.rxSpeaker) ?? 0) != 0 ? 0 : 1)
-        default: break
-        }
-    }
+    // Parked with the section above. The mapping is the one the hardware
+    // showed: 1 is the host keeping its own output, 0 hands it to the receiver.
+    //
+    //  private var speakerButtonTitle: String {
+    //      (state.value(.rxSpeaker) ?? 0) != 0 ? "Turn the speaker off…" : "Turn the speaker on…"
+    //  }
+    //
+    //  private func apply(_ attr: Attr) {
+    //      switch attr {
+    //      case .rxSpeaker: state.setRisky(.rxSpeaker, to: (state.value(.rxSpeaker) ?? 0) != 0 ? 0 : 1)
+    //      default: break
+    //      }
+    //  }
 }
 
 extension Bundle {
