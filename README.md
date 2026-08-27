@@ -73,7 +73,7 @@ Quit the app before running `--probe`. Interface 1 is opened exclusively and wil
 
 ## Reverse engineering
 
-The settings (aka "attributes") on the usb dongle are interacted with BOYA's protocal called **"CFD-Link"**. BOYA publishes no description of the protocol. The protocol description below was found in BOYA's apps and verified against the usb dongle. [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+The settings (aka "attributes") on the usb dongle are interacted with using BOYA's own protocal called **"CFD-Link"**. BOYA publishes no description of the protocol. The protocol description below was found in BOYA's apps and verified against the usb dongle. [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 ### The frame format
 
