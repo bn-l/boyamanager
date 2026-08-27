@@ -42,14 +42,14 @@ enum BoyaManagerMain {
 struct BoyaManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self)
     private var delegate
+    @Environment(\.openSettings)
+    private var openSettings
 
-    /// No `Settings` scene: the window it makes cannot be told to float, and
-    /// this one is opened from a menu bar item with the user's real work in
-    /// front of it. `SettingsWindowController` owns it instead.
     var body: some Scene {
         MenuBarExtra {
             PopoverView(state: Shared.controller.state) {
-                Shared.controller.showSettings()
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
             }
         } label: {
             Image(nsImage: Shared.controller.menuBarImage)
@@ -57,6 +57,17 @@ struct BoyaManagerApp: App {
                 .help(Shared.controller.state.tooltip)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(preferences: Shared.controller.preferences, state: Shared.controller.state)
+        }
+        // Opened from a menu bar item, by someone with their real work in front
+        // of them — a settings window that drops behind that work the moment it
+        // loses focus is one you have to go and find again.
+        .windowLevel(.floating)
+        // The panes state the height they need; this is what stops the window
+        // deciding otherwise.
+        .windowResizability(.contentSize)
     }
 }
 
@@ -82,18 +93,11 @@ final class AppController {
     /// for the life of the process, firing at a session that has been shut
     /// down.
     private var workspaceObservers: [any NSObjectProtocol] = []
-    private let settingsWindow: SettingsWindowController
 
     init() {
         let preferences = Preferences()
-        let state = MicState(preferences: preferences)
         self.preferences = preferences
-        self.state = state
-        settingsWindow = SettingsWindowController(preferences: preferences, state: state)
-    }
-
-    func showSettings() {
-        settingsWindow.show()
+        state = MicState(preferences: preferences)
     }
 
     /// The menu bar label. Reading `state` and `preferences` here is what makes

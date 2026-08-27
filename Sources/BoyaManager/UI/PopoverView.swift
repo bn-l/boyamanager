@@ -177,7 +177,7 @@ private struct TransmitterRow: View {
             if transmitter.isOnline {
                 // Green, and red on the last bar — the same rule the menu bar
                 // icon follows, so the two never disagree.
-                LevelBars(level: transmitter.battery, tint: transmitter.battery == 1 ? .red : .green)
+                LevelBars(level: transmitter.battery, tint: transmitter.battery == 1 ? LevelBars.low : LevelBars.lit)
                 if transmitter.charging == 1 {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 8))
@@ -185,7 +185,7 @@ private struct TransmitterRow: View {
                         .accessibilityLabel("charging")
                 }
                 Text("battery").font(.system(size: 11)).foregroundStyle(.secondary)
-                LevelBars(level: transmitter.signal, tint: LevelBars.signal)
+                LevelBars(level: transmitter.signal, tint: LevelBars.lit)
                 Text("signal").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 if let channel = transmitter.channel {

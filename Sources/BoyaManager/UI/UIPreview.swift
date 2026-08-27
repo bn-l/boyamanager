@@ -46,9 +46,9 @@ enum UIPreview {
             state.apply(.state(.ready))
             state.apply(.identified(previewIdentity))
             state.apply(.snapshot(sampleSnapshot))
-            // Each tab on its own and then the tabbed view, every one at the
-            // size it asks for — which is the size the window will give it, so
-            // a pane whose last card is against the bottom edge shows it here.
+            // Each pane on its own and then the tabbed view, every one at the
+            // size it asks for — which is the size the window gives it, so a
+            // pane whose last card is against the bottom edge shows it here.
             try renderPane(GeneralSettings(preferences: preferences, state: state), "settings-general.png", to: directory)
             try renderPane(DeviceSettings(state: state), "settings-device.png", to: directory)
             try renderPane(AdvancedSettings(state: state), "settings-advanced.png", to: directory)

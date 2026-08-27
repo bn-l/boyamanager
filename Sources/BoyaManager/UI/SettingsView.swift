@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+/// The tab strip is the toolbar every other settings window on the system has,
+/// and a `TabView` only draws itself that way inside a `Settings` scene. In a
+/// window of our own it comes out as a row of segmented pills, which is why
+/// this is not a window of our own.
 struct SettingsView: View {
     @Bindable var preferences: Preferences
     @Bindable var state: MicState

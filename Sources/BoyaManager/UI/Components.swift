@@ -13,10 +13,11 @@ struct LevelBars: View {
     /// Drawn rather than left out, so the gauge keeps its width. Any tint near
     /// this one reads as unlit whatever the level says.
     static let unlit = Color.secondary.opacity(0.22)
-    /// Signal is the text colour, not `.secondary`: four bars of 55% grey
-    /// beside four of 12% grey is a gauge nobody can read, and beside a vivid
-    /// green battery it reads as empty at full strength.
-    static let signal = Color.primary
+    /// One colour for a met bar, whichever gauge it belongs to. Two gauges side
+    /// by side in two different colours read as two different kinds of thing.
+    static let lit = Color.green
+    /// The exception: a battery on its last bar.
+    static let low = Color.red
 
     let level: UInt8?
     var count: Int = 4
