@@ -149,6 +149,22 @@ struct CFDLinkTests {
         #expect(frames.count == 1)
         #expect(frames.first?.isHeartbeat == true)
     }
+
+    /// The dangerous corruption is not a length past the maximum — that is
+    /// caught by the range check — but a length that is still legal. It makes
+    /// the candidate overshoot into the frame behind it, and consuming the
+    /// candidate before checking its checksum took that frame with it.
+    @Test("A corrupt but in-range length does not swallow the frame behind it")
+    func corruptLengthDoesNotEatTheNextFrame() {
+        var reassembler = CFDReassembler()
+        var corrupt = CFDLink.encode(message: .getAttribute, seq: 1, payload: [1, 2, 3, 4])
+        corrupt[2] = 10  // declares 27 bytes; the frame is 21, so it reaches into the next
+
+        let frames = reassembler.feed(corrupt + Fixtures.deviceHeartbeat)
+
+        #expect(frames.count == 1, "the corrupt frame is lost; the one after it is not")
+        #expect(frames.first?.isHeartbeat == true)
+    }
 }
 
 @Suite("Attribute decoding")

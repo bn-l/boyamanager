@@ -185,11 +185,17 @@ struct CFDReassembler: Sendable {
             let total = CFDLink.headerLength + length + 1
             guard buffer.count >= total else { break }
 
-            let candidate = Array(buffer[0..<total])
-            buffer.removeFirst(total)
-            if let frame = CFDFrame(parsing: candidate) {
-                frames.append(frame)
+            // Consumed only once it has proved to be a frame. A corrupted
+            // length that is still in range makes `total` overshoot into the
+            // next frame, and taking the candidate on trust threw that one
+            // away as well. On a failed checksum, give up one byte and let the
+            // resync above find the following `55 1X`.
+            guard let frame = CFDFrame(parsing: Array(buffer[0..<total])) else {
+                buffer.removeFirst()
+                continue
             }
+            buffer.removeFirst(total)
+            frames.append(frame)
         }
         return frames
     }
