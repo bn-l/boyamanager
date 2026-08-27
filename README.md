@@ -35,9 +35,9 @@ It runs as a normal user and does not require root.
 | | State | Meaning |
 |:---:|---|---|
 | <img src="docs/icon-level.svg" alt="" width="46"> | A mic is connected | The bars are that mic's battery level from 0 to 4. The app draws one dot for each mic connected. |
-| <img src="docs/icon-level-two.svg" alt="" width="46"> | Two mics are online | The dots say how many mics are online and not which ones. The bars show the level of whichever mic has less battery remaining. |
+| <img src="docs/icon-level-two.svg" alt="" width="46"> | Two mics are online | The bars show the level of whichever mic has less battery remaining. |
 | <img src="docs/icon-offline.svg" alt="" width="46"> | No mic is online | The usb dongle is connected and responding and no mic is switched on. |
-| <img src="docs/icon-connecting.svg" alt="" width="46"> | Connecting | The app is opening a session or waiting to retry after a failure. The icon fades in and out for as long as that lasts. That fade is what separates it from the state where no mic is online. |
+| <img src="docs/icon-connecting.svg" alt="" width="46"> | Connecting | The app is opening a session or waiting to retry after a failure. The icon fades in and out for as long as that lasts. |
 | <img src="docs/icon-disconnected.svg" alt="" width="46"> | No usb dongle | No usb dongle is plugged in. |
 
 ## Requirements
