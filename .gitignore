@@ -59,6 +59,13 @@ GUIDE_*.md
 .clemp-lock.yaml
 /boyabridge
 
+# Working notes — kept locally, never published
+GUIDANCE_*.md
+BOYA_MENUBAR_PLAN.md
+TWO_MIC_NOISE_CANCEL.md
+readme_accountability.md
+/temp
+
 # macOS
 .DS_Store
 
