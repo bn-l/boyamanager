@@ -6,7 +6,9 @@
 
 A macOS menu bar app for the **BOYA mini 2** wireless mic. It shows you the mic battery level in the menu bar and reads and let's you change various settings that are otherwise inaccessible without an app.
 
-BOYA's own application does not support this mic model and is generally pretty terrible. 
+BOYA's own application does not support this mic model and is generally pretty terrible.
+
+Hopefully this is useful for someone. It's a great little microphone.
 
 <h3 align="center"><a href="#reverse-engineering">Skip to the reverse engineering →</a></h3>
 
@@ -47,7 +49,9 @@ may use the same protocol with a different set of attributes but I haven't teste
 
 ## Install
 
-<!-- insert homebrew instructions when available -->
+```sh
+brew install --cask bn-l/tap/boyamanager
+```
 
 ## Settings
 
