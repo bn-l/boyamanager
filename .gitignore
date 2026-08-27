@@ -9,6 +9,7 @@ src.md
 REPOMAP.md
 CODEGUIDE.md
 **/.cursor
+.vscode/
 .mcp.json
 __pycache__/
 *.py[cod]
