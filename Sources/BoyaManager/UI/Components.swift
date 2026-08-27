@@ -10,6 +10,14 @@ let popoverControlWidth: CGFloat = 170
 /// A 0…4 bar gauge, the way the receiver reports battery and signal. Unmet bars
 /// stay drawn in grey so the gauge keeps its width as the level changes.
 struct LevelBars: View {
+    /// Drawn rather than left out, so the gauge keeps its width. Any tint near
+    /// this one reads as unlit whatever the level says.
+    static let unlit = Color.secondary.opacity(0.22)
+    /// Signal is the text colour, not `.secondary`: four bars of 55% grey
+    /// beside four of 12% grey is a gauge nobody can read, and beside a vivid
+    /// green battery it reads as empty at full strength.
+    static let signal = Color.primary
+
     let level: UInt8?
     var count: Int = 4
     var tint: Color = .primary
@@ -18,7 +26,7 @@ struct LevelBars: View {
         HStack(spacing: 1.5) {
             ForEach(0..<count, id: \.self) { index in
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(index < Int(level ?? 0) ? tint : Color.secondary.opacity(0.22))
+                    .fill(index < Int(level ?? 0) ? tint : Self.unlit)
                     .frame(width: 4, height: 5 + CGFloat(index) * 1.5)
             }
         }

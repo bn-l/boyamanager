@@ -31,7 +31,19 @@ struct PopoverView: View {
             Text(state.identity?.model ?? "BOYA mini 2")
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
-            StatusPill(state: state.connection) { state.retry() }
+            VStack(alignment: .trailing, spacing: 1) {
+                StatusPill(state: state.connection) { state.retry() }
+                // "Connected" is about the link. Everything else on screen came
+                // from a poll, and a link that is up while the polls time out
+                // shows numbers minutes old with nothing to say so. `.relative`
+                // keeps counting on its own — a string formatted here would sit
+                // at "0s ago" until the next poll redrew it.
+                if let updated = state.lastUpdate {
+                    Text("updated \(updated, style: .relative) ago")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
     }
 
@@ -121,6 +133,13 @@ struct PopoverView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if let problem = state.connectionProblem {
+                // The pill has room for "Failed" and a Retry link, and none at
+                // all for why.
+                Text(problem)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Button(action: openSettings) {
@@ -178,7 +197,7 @@ private struct TransmitterRow: View {
                         .accessibilityLabel("charging")
                 }
                 Text("battery").font(.system(size: 11)).foregroundStyle(.secondary)
-                LevelBars(level: transmitter.signal, tint: .secondary)
+                LevelBars(level: transmitter.signal, tint: LevelBars.signal)
                 Text("signal").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 if let channel = transmitter.channel {

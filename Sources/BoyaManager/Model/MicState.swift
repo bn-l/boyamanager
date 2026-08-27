@@ -235,6 +235,17 @@ final class MicState {
         connection.isReady ? lastError : nil
     }
 
+    /// Why the receiver is not connected, for the popover. Nil while it is
+    /// connected, connecting, or simply absent: the status pill says all three
+    /// on its own, and the one thing it has no room for is a reason.
+    var connectionProblem: String? {
+        switch connection {
+        case let .failed(kind): kind.summary.capitalizedFirst
+        case let .waitingToRetry(kind, attempt, _): "\(kind.summary.capitalizedFirst) — attempt \(attempt)"
+        case .ready, .connecting, .idle: nil
+        }
+    }
+
     // MARK: - notifications
 
     private func checkTransmitterNotifications() {
