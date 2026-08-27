@@ -4,16 +4,22 @@ import OSLog
 private let logger = Logger(subsystem: BoyaLog.subsystem, category: "Icon")
 
 /// The menu bar image: a hollow "B" with the transmitter's battery drawn as
-/// bars inside it — a battery gauge shaped like a B.
+/// bars inside it — a battery gauge shaped like a B — and one dot per online
+/// transmitter in the clear column to its right.
 ///
-/// Normally a template image (alpha only) so macOS paints it correctly on light
-/// and dark menu bars and handles click highlighting. Colour cannot survive a
-/// template, so a red last bar or a green online dot forces the outline to be
-/// drawn in the appearance ink instead.
+/// Drawn in white, with alpha carrying every level of grey, and always a
+/// template image. That is what a template *is*: the alpha channel is the
+/// shape and macOS inks it to suit the menu bar it is sitting on, light or
+/// dark, highlighted or not. Colour cannot survive that, and colour is the
+/// only thing the app used to guess an appearance for.
 enum MicBadgeIcon {
-    static let size: CGFloat = 18
-    /// The level at which the bar turns red. The rest of the app takes its
-    /// low-battery rule from here so the warning and the drawing agree.
+    /// Not square: the dots live in their own column so they never have to be
+    /// knocked out of the letter.
+    static let width: CGFloat = 21
+    static let height: CGFloat = 18
+    /// The level at which the app calls the battery low. The icon shows it as
+    /// the one bar it is; the rest of the app takes the rule from here so the
+    /// warning and the drawing agree.
     static let lowBatteryLevel: UInt8 = 1
 
     enum Kind: Sendable, Equatable {
@@ -27,9 +33,8 @@ enum MicBadgeIcon {
         case connecting
     }
 
-    static func image(kind: Kind, darkAppearance: Bool = true) -> NSImage {
-        let coloured = kind.isColoured
-        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
+    static func image(kind: Kind) -> NSImage {
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else {
                 logger.error("No CGContext available for the badge")
                 return false
@@ -39,25 +44,19 @@ enum MicBadgeIcon {
             context.saveGState()
             defer { context.restoreGState() }
 
-            let ink = inkColor(kind: kind, coloured: coloured, darkAppearance: darkAppearance)
+            let ink = inkColor(kind: kind)
             ink.setStroke()
             Geometry.outline.stroke()
 
             if let level = kind.level, level > 0 {
-                (level <= lowBatteryLevel ? NSColor.systemRed : ink).setFill()
+                ink.setFill()
                 for bar in Geometry.bars.prefix(Int(min(level, 4))) {
                     NSBezierPath(roundedRect: bar, xRadius: Geometry.barRadius, yRadius: Geometry.barRadius).fill()
                 }
             }
 
+            ink.setFill()
             for centre in Geometry.dotCentres.prefix(kind.onlineCount) {
-                // Knock a ring out of the letter first, so a dot sitting on the
-                // stem reads as a dot rather than as a bulge in the stroke.
-                context.saveGState()
-                context.setBlendMode(.destinationOut)
-                NSBezierPath(circleAt: centre, radius: Geometry.dotRadius + Geometry.dotRing).fill()
-                context.restoreGState()
-                NSColor.systemGreen.setFill()
                 NSBezierPath(circleAt: centre, radius: Geometry.dotRadius).fill()
             }
 
@@ -73,27 +72,28 @@ enum MicBadgeIcon {
             }
             return true
         }
-        image.isTemplate = !coloured
+        image.isTemplate = true
         image.accessibilityDescription = kind.accessibilityDescription
         return image
     }
 
-    private static func inkColor(kind: Kind, coloured: Bool, darkAppearance: Bool) -> NSColor {
+    /// White throughout; the state is in the alpha.
+    private static func inkColor(kind: Kind) -> NSColor {
         let alpha: CGFloat
         switch kind {
         case .level: alpha = 1
         case .offline: alpha = 0.6
         case .disconnected, .connecting: alpha = 0.4
         }
-        guard coloured else { return NSColor(white: 0, alpha: alpha) }
-        return (darkAppearance ? NSColor.white : NSColor.black).withAlphaComponent(alpha)
+        return NSColor(white: 1, alpha: alpha)
     }
 
-    private static func strikePath(width: CGFloat) -> NSBezierPath {
+    /// Across the letter, not across the canvas — the dot column stays clear.
+    private static func strikePath(width strokeWidth: CGFloat) -> NSBezierPath {
         let path = NSBezierPath()
         path.move(to: CGPoint(x: 1.5, y: 2.5))
-        path.line(to: CGPoint(x: size - 1.5, y: size - 2.5))
-        path.lineWidth = width
+        path.line(to: CGPoint(x: height - 1.5, y: height - 2.5))
+        path.lineWidth = strokeWidth
         path.lineCapStyle = .round
         return path
     }
@@ -117,6 +117,8 @@ enum MicBadgeIcon {
         static let upperRight: CGFloat = 14.3
         static let lowerRight: CGFloat = 15.2
         static let waistX: CGFloat = 11.6
+        /// The furthest right the letter is drawn, half a stroke past the lobe.
+        static var letterRight: CGFloat { lowerRight + stroke / 2 }
 
         static let barLeft: CGFloat = 5.9
         static let barRight: CGFloat = 10.6
@@ -124,12 +126,11 @@ enum MicBadgeIcon {
         static let barGap: CGFloat = 0.95
         static let barRadius: CGFloat = 0.4
 
-        static let dotRadius: CGFloat = 1.5
-        /// Enough of a gap that a dot on the stem reads as a dot, not enough to
-        /// take the stem's corner away with it.
-        static let dotRing: CGFloat = 0.5
-        /// Top-left, overlapping the stem, and the second directly below it.
-        static let dotCentres = [CGPoint(x: 2.3, y: 15.3), CGPoint(x: 2.3, y: 11.7)]
+        static let dotRadius: CGFloat = 2
+        /// Top-right, in the column the letter does not reach, and the second
+        /// directly below it. Clear of the lobe, so neither needs knocking out
+        /// of the stroke to read as a dot.
+        static let dotCentres = [CGPoint(x: 18.6, y: 15.6), CGPoint(x: 18.6, y: 11)]
 
         static var outline: NSBezierPath {
             let path = NSBezierPath()
@@ -201,14 +202,6 @@ extension MicBadgeIcon.Kind {
         return 0
     }
 
-    /// A red bar or a green dot. Either means the image cannot be a template,
-    /// because a template image is alpha and nothing else. Level 0 draws no bar
-    /// at all, so there is nothing there to be red.
-    var isColoured: Bool {
-        guard let level else { return false }
-        return (level > 0 && level <= MicBadgeIcon.lowBatteryLevel) || onlineCount > 0
-    }
-
     var accessibilityDescription: String {
         switch self {
         case let .level(level, online):
@@ -256,7 +249,7 @@ extension MicBadgeIcon {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for sample in samples {
-                let badge = image(kind: sample.kind, darkAppearance: sample.dark)
+                let badge = image(kind: sample.kind)
                 // Rasterize before compositing — drawing a live handler-backed
                 // image inside another one distorts its coordinates.
                 guard let badgeData = badge.tiffRepresentation, let bitmap = NSImage(data: badgeData) else {
@@ -265,21 +258,19 @@ extension MicBadgeIcon {
                 }
                 // A template image is alpha only; tint it the way the menu bar
                 // would before compositing, or it is invisible on the preview.
-                let tinted = badge.isTemplate
-                    ? NSImage(size: bitmap.size, flipped: false) { rect in
-                        bitmap.draw(in: rect)
-                        (sample.dark ? NSColor.white : NSColor.black).set()
-                        rect.fill(using: .sourceAtop)
-                        return true
-                    }
-                    : bitmap
+                let tinted = NSImage(size: bitmap.size, flipped: false) { rect in
+                    bitmap.draw(in: rect)
+                    (sample.dark ? NSColor.white : NSColor.black).set()
+                    rect.fill(using: .sourceAtop)
+                    return true
+                }
 
-                let edge = size * scale
-                let canvas = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+                let canvasSize = NSSize(width: width * scale, height: height * scale)
+                let canvas = NSImage(size: canvasSize, flipped: false) { rect in
                     NSColor(white: sample.dark ? 0.15 : 0.85, alpha: 1).setFill()
                     rect.fill()
                     NSGraphicsContext.current?.imageInterpolation = .none
-                    tinted.draw(in: rect.insetBy(dx: size, dy: size))
+                    tinted.draw(in: rect.insetBy(dx: width, dy: height))
                     return true
                 }
                 guard let tiff = canvas.tiffRepresentation,

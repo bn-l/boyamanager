@@ -81,13 +81,11 @@ final class AppController {
     private let watcher = DeviceWatcher()
     private var session: ReceiverSession?
     private var sessionTask: Task<Void, Never>?
-    private var appearanceObserver: AppearanceObserver?
     /// Block-based observers are only removable through the token
     /// `addObserver` hands back. Discarding them leaves the blocks registered
     /// for the life of the process, firing at a session that has been shut
     /// down.
     private var workspaceObservers: [any NSObjectProtocol] = []
-    private var isDarkAppearance = true
 
     init() {
         let preferences = Preferences()
@@ -98,16 +96,12 @@ final class AppController {
     /// The menu bar label. Reading `state` and `preferences` here is what makes
     /// Observation re-render the label when the device reports something new.
     var menuBarImage: NSImage {
-        MicBadgeIcon.image(kind: state.iconKind, darkAppearance: isDarkAppearance)
+        MicBadgeIcon.image(kind: state.iconKind)
     }
 
     func start() {
         logger.notice("BoyaManager starting")
-        isDarkAppearance = NSApp.effectiveAppearance.isDark
         Task { await state.prepareNotifications() }
-        appearanceObserver = AppearanceObserver { [weak self] isDark in
-            self?.isDarkAppearance = isDark
-        }
 
         let session = ReceiverSession(
             makeLink: { IAP2Link(transport: try USBTransport()) },
@@ -223,21 +217,3 @@ private final class OneShot {
     }
 }
 
-/// KVO on `NSApp.effectiveAppearance`, so the low-battery icon — which cannot
-/// be a template image — is re-rendered when the menu bar flips light or dark.
-@MainActor
-private final class AppearanceObserver {
-    private var observation: NSKeyValueObservation?
-
-    init(onChange: @escaping @MainActor (Bool) -> Void) {
-        observation = NSApp.observe(\.effectiveAppearance, options: [.new]) { _, _ in
-            Task { @MainActor in onChange(NSApp.effectiveAppearance.isDark) }
-        }
-    }
-}
-
-extension NSAppearance {
-    var isDark: Bool {
-        bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-    }
-}

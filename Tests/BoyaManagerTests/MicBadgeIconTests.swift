@@ -12,12 +12,14 @@ struct MicBadgeIconTests {
     private static let scale = 4
 
     private func sampler(_ image: NSImage) throws -> (rep: NSBitmapImageRep, at: (CGFloat, CGFloat) -> NSColor?) {
-        let size = MicBadgeIcon.size
-        let pixels = Int(size) * Self.scale
+        let width = MicBadgeIcon.width
+        let height = MicBadgeIcon.height
+        let across = Int(width) * Self.scale
+        let down = Int(height) * Self.scale
         let rep = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil,
-            pixelsWide: pixels,
-            pixelsHigh: pixels,
+            pixelsWide: across,
+            pixelsHigh: down,
             bitsPerSample: 8,
             samplesPerPixel: 4,
             hasAlpha: true,
@@ -26,15 +28,15 @@ struct MicBadgeIconTests {
             bytesPerRow: 0,
             bitsPerPixel: 0
         ))
-        rep.size = NSSize(width: size, height: size)
+        rep.size = NSSize(width: width, height: height)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        image.draw(in: NSRect(x: 0, y: 0, width: size, height: size))
+        image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
         NSGraphicsContext.restoreGraphicsState()
 
         let at: (CGFloat, CGFloat) -> NSColor? = { x, y in
-            let px = min(pixels - 1, max(0, Int(x / size * CGFloat(pixels))))
-            let py = min(pixels - 1, max(0, Int((size - y) / size * CGFloat(pixels))))
+            let px = min(across - 1, max(0, Int(x / width * CGFloat(across))))
+            let py = min(down - 1, max(0, Int((height - y) / height * CGFloat(down))))
             return rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB)
         }
         return (rep, at)
@@ -45,7 +47,7 @@ struct MicBadgeIconTests {
     /// a claim about what is drawn, not about the rectangles handed to the
     /// drawing code.
     private func inkedWidth(_ at: (CGFloat, CGFloat) -> NSColor?, y: CGFloat, from: CGFloat, to: CGFloat) -> CGFloat {
-        let step = MicBadgeIcon.size / CGFloat(Self.scale * Int(MicBadgeIcon.size))
+        let step = 1 / CGFloat(Self.scale)
         var inked: CGFloat = 0
         var x = from
         while x <= to {
@@ -63,15 +65,37 @@ struct MicBadgeIconTests {
         }
     }
 
-    @Test("The badge is an 18×18 template image in every ordinary state", arguments: [
-        MicBadgeIcon.Kind.level(0, online: 0), .level(2, online: 0), .level(4, online: 0),
+    /// Every state, low battery and online transmitters included. Colour in any
+    /// one of them would mean an image that is not a template, which means the
+    /// app guessing which menu bar it is on — and being wrong whenever the
+    /// wallpaper, not the system setting, decides that.
+    @Test("The badge is a 21×18 template image in every state", arguments: [
+        MicBadgeIcon.Kind.level(0, online: 0), .level(1, online: 0), .level(2, online: 0),
+        .level(4, online: 0), .level(1, online: 2), .level(3, online: 1),
         .offline, .disconnected, .connecting,
     ])
     func templateAndSize(kind: MicBadgeIcon.Kind) {
         let image = MicBadgeIcon.image(kind: kind)
 
         #expect(image.isTemplate)
-        #expect(image.size == NSSize(width: 18, height: 18))
+        #expect(image.size == NSSize(width: 21, height: 18))
+    }
+
+    /// White ink, and the tone entirely in the alpha — a template is inked by
+    /// the system, so anything else in the colour channels is a lie about what
+    /// will be drawn.
+    @Test("The ink is white in every state, and the state is in the alpha")
+    func inkIsWhiteWithAlpha() throws {
+        let stem = MicBadgeIcon.Geometry.stemX
+        var alphas: [CGFloat] = []
+        for kind in [MicBadgeIcon.Kind.level(4, online: 0), .offline, .connecting] {
+            let ink = try #require(try sampler(MicBadgeIcon.image(kind: kind)).at(stem, 7))
+            #expect(ink.brightnessComponent > 0.9, "\(kind) drew ink at brightness \(ink.brightnessComponent)")
+            alphas.append(ink.alphaComponent)
+        }
+
+        #expect(alphas[0] > alphas[1], "a connected transmitter should be the strongest")
+        #expect(alphas[1] > alphas[2], "offline should sit between connected and no receiver")
     }
 
     @Test("The letter's stem is always inked, and the canvas corners never are", arguments: [
@@ -84,8 +108,8 @@ struct MicBadgeIconTests {
 
         #expect((at(MicBadgeIcon.Geometry.stemX, 7)?.alphaComponent ?? 0) > 0.3, "the stem should be inked")
         #expect((at(0.5, 0.5)?.alphaComponent ?? 1) < 0.1, "bottom-left corner should be clear")
-        #expect((at(17.5, 17.5)?.alphaComponent ?? 1) < 0.1, "top-right corner should be clear")
-        #expect((at(17.5, 0.5)?.alphaComponent ?? 1) < 0.1, "bottom-right corner should be clear")
+        #expect((at(20.5, 17.5)?.alphaComponent ?? 1) < 0.1, "top-right corner should be clear")
+        #expect((at(20.5, 0.5)?.alphaComponent ?? 1) < 0.1, "bottom-right corner should be clear")
     }
 
     /// The letter is one closed stroke around a single hollow — no horizontal
@@ -142,7 +166,7 @@ struct MicBadgeIconTests {
 
         for bar in MicBadgeIcon.Geometry.bars {
             #expect((at(0.5, bar.midY)?.alphaComponent ?? 1) < 0.1, "ink left of the stem at y=\(bar.midY)")
-            #expect((at(17.5, bar.midY)?.alphaComponent ?? 1) < 0.1, "ink right of the lobes at y=\(bar.midY)")
+            #expect((at(16.4, bar.midY)?.alphaComponent ?? 1) < 0.1, "ink right of the lobes at y=\(bar.midY)")
         }
         // The waist is the narrowest point of the hollow; the bars must clear it.
         #expect(MicBadgeIcon.Geometry.bars[0].maxX < MicBadgeIcon.Geometry.waistX - MicBadgeIcon.Geometry.stroke / 2)
@@ -173,41 +197,38 @@ struct MicBadgeIconTests {
         #expect((connectedAt(15.5, 14.8)?.alphaComponent ?? 1) < 0.1, "a connected receiver must not be struck through")
     }
 
-    @Test("The last bar is red and the rest are not", arguments: [true, false])
-    func lastBarIsRed(dark: Bool) throws {
-        let low = MicBadgeIcon.image(kind: .level(1, online: 0), darkAppearance: dark)
-        let healthy = MicBadgeIcon.image(kind: .level(4, online: 0), darkAppearance: dark)
-
-        #expect(!low.isTemplate, "a template image is alpha only — the red would be lost")
-        let bar = MicBadgeIcon.Geometry.bars[0]
-        let lowInk = try #require(try sampler(low).at(bar.midX, bar.midY))
-        #expect(lowInk.redComponent - lowInk.blueComponent > 0.2, "expected a red bar, got \(lowInk)")
-
-        // Bars 2 to 4 are ordinary ink, whatever bar 1 is doing.
-        let healthyAt = try sampler(healthy).at
-        for other in MicBadgeIcon.Geometry.bars.dropFirst() {
-            let ink = try #require(healthyAt(other.midX, other.midY))
-            #expect(abs(ink.redComponent - ink.blueComponent) < 0.1, "bar at \(other.midY) should not be red, got \(ink)")
-        }
-        #expect(healthy.isTemplate)
-    }
-
-    @Test("One green dot per online transmitter, the second below the first", arguments: [0, 1, 2])
+    @Test("One dot per online transmitter, the second below the first", arguments: [0, 1, 2])
     func onlineDots(count: Int) throws {
         let image = MicBadgeIcon.image(kind: .level(3, online: count))
 
         let (_, at) = try sampler(image)
 
         for (index, centre) in MicBadgeIcon.Geometry.dotCentres.enumerated() {
-            let ink = at(centre.x, centre.y)
+            let alpha = at(centre.x, centre.y)?.alphaComponent ?? 0
             if index < count {
-                let dot = try #require(ink)
-                #expect(dot.greenComponent - dot.redComponent > 0.2, "dot \(index + 1) is not green: \(dot)")
+                #expect(alpha > 0.9, "dot \(index + 1) should be drawn for \(count) online")
             } else {
-                #expect((ink?.alphaComponent ?? 0) < 0.2, "dot \(index + 1) should not be drawn for \(count) online")
+                #expect(alpha < 0.2, "dot \(index + 1) should not be drawn for \(count) online")
             }
         }
-        #expect(image.isTemplate == (count == 0), "colour and template mode are mutually exclusive")
+    }
+
+    /// In their own column rather than badged onto the lobe: a dot that
+    /// overlaps the letter has to be knocked out of it to read as a dot, and a
+    /// knock-out at 18 points takes a visible bite out of the stroke.
+    @Test("The dots clear the letter, so nothing has to be cut out of it")
+    func dotsClearTheLetter() throws {
+        let image = MicBadgeIcon.image(kind: .level(4, online: 2))
+        let dots = MicBadgeIcon.Geometry.dotCentres
+        let radius = MicBadgeIcon.Geometry.dotRadius
+
+        let (_, at) = try sampler(image)
+
+        #expect(dots[0].x - radius > MicBadgeIcon.Geometry.letterRight, "the dots overlap the lobe")
+        #expect(dots[0].x + radius < MicBadgeIcon.width, "the dots run off the canvas")
+        // The gap between the letter and the dot column stays empty.
+        let gap = (MicBadgeIcon.Geometry.letterRight + dots[0].x - radius) / 2
+        #expect((at(gap, dots[0].y)?.alphaComponent ?? 1) < 0.1, "ink between the letter and its dots")
     }
 
     @Test("The second dot sits directly below the first, not beside it")
@@ -218,26 +239,7 @@ struct MicBadgeIconTests {
         #expect(dots[0].x == dots[1].x)
         #expect(dots[1].y < dots[0].y)
         #expect(dots[0].y - dots[1].y >= MicBadgeIcon.Geometry.dotRadius * 2, "the dots would overlap")
-    }
-
-    @Test("With colour on it, the letter still follows the menu bar")
-    func colouredOutlineFollowsAppearance() throws {
-        let onDark = MicBadgeIcon.image(kind: .level(1, online: 1), darkAppearance: true)
-        let onLight = MicBadgeIcon.image(kind: .level(1, online: 1), darkAppearance: false)
-
-        let dark = try #require(try sampler(onDark).at(MicBadgeIcon.Geometry.stemX, 7))
-        let light = try #require(try sampler(onLight).at(MicBadgeIcon.Geometry.stemX, 7))
-
-        #expect(dark.brightnessComponent > 0.9, "the letter should be white on a dark menu bar")
-        #expect(light.brightnessComponent < 0.1, "the letter should be black on a light menu bar")
-    }
-
-    @Test("A state with no bars and no dots stays a template")
-    func statesWithoutColourStayTemplates() {
-        #expect(MicBadgeIcon.image(kind: .offline).isTemplate)
-        #expect(MicBadgeIcon.image(kind: .disconnected).isTemplate)
-        #expect(MicBadgeIcon.image(kind: .connecting).isTemplate)
-        #expect(MicBadgeIcon.image(kind: .level(0, online: 0)).isTemplate)
+        #expect(dots[0].y > MicBadgeIcon.height / 2, "the first dot belongs at the top")
     }
 
     @Test("Every state carries an accessibility description")
