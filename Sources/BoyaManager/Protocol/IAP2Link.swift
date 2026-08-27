@@ -353,11 +353,14 @@ actor IAP2Link {
             identity = DeviceIdentity(parsing: message.parameters)
             isIdentified = true
         case ControlMessage.ID.statusExternalAccessorySession.rawValue:
-            // Parameter 0 is the session the status is about. A status for a
-            // session we did not ask for says nothing about ours.
-            let reported = message.parameters.first { $0.id == 0 }?.data
-            guard reported == nil || reported == externalAccessorySessionID.bigEndianBytes else {
-                logger.info("EA status for session \(reported?.hexString ?? "?", privacy: .public) — not ours")
+            // Parameter 0 is the session the status is about, and the receiver
+            // sends it — it is in the capture. A status for another session, or
+            // one that names no session at all, says nothing about ours, and
+            // accepting either opens a session on somebody else's word.
+            guard let reported = message.parameters.first(where: { $0.id == 0 })?.data,
+                  reported == externalAccessorySessionID.bigEndianBytes
+            else {
+                logger.info("EA status for session \(message.parameters.first { $0.id == 0 }?.data.hexString ?? "none", privacy: .public) — not ours")
                 return
             }
             externalAccessoryStatus = message.parameters.first { $0.id == 1 }?.data.first

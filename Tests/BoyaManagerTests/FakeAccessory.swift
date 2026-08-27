@@ -29,6 +29,8 @@ actor FakeAccessory: ByteTransport {
         /// Report the status against a different session than the one asked
         /// for, which says nothing about ours.
         var statusSessionOverride: UInt16?
+        /// Report a status that names no session at all.
+        var omitsStatusSession = false
         /// Answer CFD requests. Off makes every request time out.
         var answersRequests = true
         /// Acknowledge N sequence numbers beyond the packet just received —
@@ -202,6 +204,14 @@ actor FakeAccessory: ByteTransport {
             if options.resetAfterIdentification { resetLink() }
         case ControlMessage.ID.startExternalAccessorySession.rawValue:
             guard options.answersSessionStatus else { return }
+            guard !options.omitsStatusSession else {
+                let anonymous = ControlMessage(
+                    id: .statusExternalAccessorySession,
+                    parameters: [ControlParameter(id: 1, data: [options.sessionStatus])]
+                )
+                emitData(session: 1, payload: anonymous.encode(), seq: nextAccessorySeq())
+                return
+            }
             var status = Fixtures.externalAccessoryStatusOpen
             status[status.count - 1] = options.sessionStatus
             if let other = options.statusSessionOverride {

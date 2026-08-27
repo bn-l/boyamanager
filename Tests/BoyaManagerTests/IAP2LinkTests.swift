@@ -427,6 +427,20 @@ struct IAP2LinkTests {
         await link.close()
     }
 
+    /// The receiver names the session in every status it sends — parameter 0 is
+    /// in the capture. A status that names none is not this session's, and
+    /// treating a missing parameter as consent opens the session on nothing.
+    @Test("A status that names no session is not consent either")
+    func statusWithoutASession() async {
+        let accessory = FakeAccessory(options: .init(omitsStatusSession: true))
+        let link = IAP2Link(transport: accessory, initialSequence: 0x40)
+
+        await #expect(throws: IAP2Link.LinkError.noSessionStatus) {
+            try await link.open(protocolName: BoyaDevice.externalAccessoryProtocol, sessionID: 1, timeout: .seconds(3))
+        }
+        await link.close()
+    }
+
     /// Acknowledgements are cumulative and the sequence space wraps, so an ack
     /// that jumped past our packet still acknowledges it. Matching on equality
     /// left such a packet looking unacknowledged forever.
