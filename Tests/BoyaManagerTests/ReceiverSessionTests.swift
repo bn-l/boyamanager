@@ -2,50 +2,52 @@
 import Foundation
 import Testing
 
+/// Shared by both session suites in this file. Teardown is awaited rather than
+/// deferred into a detached task, so one test's session, fake and timers are
+/// finished before the next starts. The link runs on the same compressed clock
+/// as the session.
+@MainActor
+private func withHarness(
+    _ options: FakeAccessory.Options = .init(),
+    policy: ReconnectPolicy = ReconnectPolicy(),
+    timings: ReceiverSession.Timings = ReceiverSession.Timings(),
+    clock: Clock = Clock(),
+    linkSleeper: @escaping IAP2Link.Sleeper = Clock.linkSleeper,
+    _ body: (SessionHarness, FakeAccessory) async throws -> Void
+) async throws {
+    let accessory = FakeAccessory(options: options)
+    let harness = await SessionHarness(
+        makeLink: { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: linkSleeper) },
+        policy: policy,
+        timings: timings,
+        clock: clock
+    )
+    do {
+        try await body(harness, accessory)
+    } catch {
+        await harness.finish()
+        throw error
+    }
+    await harness.finish()
+}
+
+private func reachedReady(_ events: [SessionEvent]) -> Bool {
+    events.contains { if case .state(.ready) = $0 { true } else { false } }
+}
+
+private func sawSnapshot(_ events: [SessionEvent]) -> Bool {
+    events.contains { if case .snapshot = $0 { true } else { false } }
+}
+
 @Suite("Receiver session, end to end against a scripted accessory")
 @MainActor
 struct ReceiverSessionTests {
-    /// Teardown is awaited rather than deferred into a detached task, so one
-    /// test's session, fake and timers are finished before the next starts.
-    /// The link runs on the same compressed clock as the session.
-    private func withHarness(
-        _ options: FakeAccessory.Options = .init(),
-        policy: ReconnectPolicy = ReconnectPolicy(),
-        timings: ReceiverSession.Timings = ReceiverSession.Timings(),
-        clock: Clock = Clock(),
-        linkSleeper: @escaping IAP2Link.Sleeper = Clock.linkSleeper,
-        _ body: (SessionHarness, FakeAccessory) async throws -> Void
-    ) async throws {
-        let accessory = FakeAccessory(options: options)
-        let harness = await SessionHarness(
-            makeLink: { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: linkSleeper) },
-            policy: policy,
-            timings: timings,
-            clock: clock
-        )
-        do {
-            try await body(harness, accessory)
-        } catch {
-            await harness.finish()
-            throw error
-        }
-        await harness.finish()
-    }
-
-    nonisolated private static func reachedReady(_ events: [SessionEvent]) -> Bool {
-        events.contains { if case .state(.ready) = $0 { true } else { false } }
-    }
-
-    nonisolated private static func sawSnapshot(_ events: [SessionEvent]) -> Bool {
-        events.contains { if case .snapshot = $0 { true } else { false } }
-    }
-
     @Test("An arriving device is taken all the way to ready")
     func reachesReady() async throws {
         try await withHarness { harness, _ in
             harness.send(.arrived)
 
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             let identity = await harness.recorder.identities.first
             #expect(identity?.serial == "CFD7387E79")
             #expect(await harness.recorder.connectAttempts == [1])
@@ -56,7 +58,7 @@ struct ReceiverSessionTests {
     func answersHeartbeats() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             let replies = await accessory.hostHeartbeatRepliesToDevice
             #expect(!replies.isEmpty, "the receiver goes mute if its heartbeats are not answered")
@@ -75,7 +77,7 @@ struct ReceiverSessionTests {
     func heartbeatTickAdvances() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             let beats = await accessory.hostFrames.filter { frame in
                 frame.message == CFDMessage.heartbeat.rawValue && frame.node == .broadcast && frame.payload.count >= 13
@@ -92,7 +94,7 @@ struct ReceiverSessionTests {
     func ignoresEchoedFrames() async throws {
         try await withHarness(.init(echoesHostFrames: true)) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
             try await Task.sleep(for: .milliseconds(300))
 
             let frames = await accessory.hostFrames
@@ -144,7 +146,7 @@ struct ReceiverSessionTests {
     func writeReadsBack() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.set(.noiseCancellation, to: 1)
 
@@ -165,7 +167,7 @@ struct ReceiverSessionTests {
     func writeThatDidNotTakeIsReported() async throws {
         try await withHarness(.init(ignoresWrites: [Attr.noiseCancellation.rawValue])) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             let before = try #require(await accessory.attributes[Attr.noiseCancellation.rawValue])
 
             await harness.session.set(.noiseCancellation, to: 1)
@@ -179,14 +181,14 @@ struct ReceiverSessionTests {
     func refusedWriteIsReported() async throws {
         try await withHarness(.init(refusesWrites: [Attr.rxGain.rawValue])) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.set(.rxGain, to: 2)
 
             let result = try #require(await harness.recorder.writeResult(for: .rxGain))
             #expect(throws: SessionError.unavailable) { try result.get() }
-            let reads = await accessory.hostFrames.count {
-                $0.message == CFDMessage.getAttribute.rawValue && $0.payload.first == Attr.rxGain.rawValue
+            let reads = await accessory.hostFrames.count { frame in
+                frame.message == CFDMessage.getAttribute.rawValue && frame.payload.first == Attr.rxGain.rawValue
             }
             #expect(reads == 0, "the device already said no; reading it back only asks again")
         }
@@ -196,7 +198,7 @@ struct ReceiverSessionTests {
     func rejectsOutOfRange() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.set(.rxGain, to: 9)
 
@@ -210,7 +212,7 @@ struct ReceiverSessionTests {
     func refusesRiskyThroughSet() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.set(.rxReset, to: 1)
 
@@ -225,7 +227,7 @@ struct ReceiverSessionTests {
     func riskyWriteGoesThrough() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.setRisky(.rxSpeaker, to: 1)
 
@@ -246,7 +248,7 @@ struct ReceiverSessionTests {
         let options = FakeAccessory.Options(restartsOnSpeakerWrite: true, resetsOnFactoryReset: true)
         try await withHarness(options) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.setRisky(attr, to: 1)
 
@@ -264,7 +266,7 @@ struct ReceiverSessionTests {
     func lazyAcknowledgementsDoNotDropTheSession() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             // 3.5 seconds of session time — long enough that insisting on an
             // acknowledgement would exhaust the link's three retries.
@@ -365,7 +367,7 @@ struct ReceiverSessionTests {
 
         await harness.session.retryNow()
 
-        #expect(await harness.recorder.wait(timeout: .seconds(20), until: Self.reachedReady))
+        #expect(await harness.recorder.wait(timeout: .seconds(20), until: reachedReady))
         await harness.finish()
     }
 
@@ -377,7 +379,7 @@ struct ReceiverSessionTests {
     func debouncesSelfReEnumeration() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(500))) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             harness.send(.removed)
             harness.send(.arrived)
@@ -392,7 +394,7 @@ struct ReceiverSessionTests {
     func removalGoesIdle() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             harness.send(.removed)
 
@@ -408,7 +410,7 @@ struct ReceiverSessionTests {
     func unplugGoesStraightToIdle() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             let before = await harness.recorder.states.count
 
             await accessory.unplug()
@@ -430,7 +432,7 @@ struct ReceiverSessionTests {
     func lateTerminationIsStillARemoval() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             let before = await harness.recorder.states.count
 
             await accessory.unplug(lag: 1)
@@ -452,7 +454,7 @@ struct ReceiverSessionTests {
     func resetMidSessionIsDiagnosed() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await accessory.resetLink()
 
@@ -473,7 +475,7 @@ struct ReceiverSessionTests {
     func silenceIsADeadLink() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             await accessory.stopHeartbeating()
 
@@ -485,6 +487,34 @@ struct ReceiverSessionTests {
         }
     }
 
+    @Test("Quitting tells the receiver to stop the session, exactly once")
+    func shutdownStopsSessionOnce() async {
+        let accessory = FakeAccessory()
+        let harness = await SessionHarness { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: Clock.linkSleeper) }
+        harness.send(.arrived)
+        #expect(await harness.recorder.wait(until: reachedReady))
+
+        await harness.finish()
+
+        #expect(await accessory.stopSessionCount == 1)
+    }
+
+    @Test("A write attempted while disconnected fails instead of hanging")
+    func writeWhileDisconnected() async throws {
+        try await withHarness { harness, _ in
+            await harness.session.set(.noiseCancellation, to: 1)
+
+            let result = try #require(await harness.recorder.writeResult(for: .noiseCancellation))
+            #expect(throws: SessionError.notReady) { try result.get() }
+        }
+    }
+}
+
+/// Split from the suite above only because it outgrew a lint limit. These
+/// are the tests about *when* the loop polls rather than about what it says.
+@Suite("Receiver session, polling cadence")
+@MainActor
+struct SessionPollingTests {
     /// Counted rather than read off the clock: the loop waits in slices, so
     /// which durations it asks its sleeper for says nothing about the cadence
     /// it is keeping. How many polls land in a fixed window does.
@@ -492,7 +522,7 @@ struct ReceiverSessionTests {
     func pollIntervalFollowsAttention() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             let idleStart = await harness.recorder.snapshots.count
             try await Task.sleep(for: .milliseconds(500))
@@ -517,7 +547,7 @@ struct ReceiverSessionTests {
         let timings = ReceiverSession.Timings(deviceDebounce: .milliseconds(50), attentionSpan: .seconds(2))
         try await withHarness(timings: timings) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             await harness.session.set(.noiseCancellation, to: 1)
             _ = await harness.recorder.writeResult(for: .noiseCancellation)
@@ -544,7 +574,7 @@ struct ReceiverSessionTests {
     func popoverPollsImmediately() async throws {
         try await withHarness(timings: Self.slowPolling) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
             let before = await harness.recorder.snapshots.count
 
             await harness.session.setPopoverVisible(true)
@@ -564,7 +594,7 @@ struct ReceiverSessionTests {
     func popoverShortensTheWaitInFlight() async throws {
         try await withHarness(timings: Self.slowPolling) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
             let before = await harness.recorder.snapshots.count
 
             await harness.session.setPopoverVisible(true)
@@ -587,7 +617,7 @@ struct ReceiverSessionTests {
         let timings = ReceiverSession.Timings(warmUp: .seconds(5), deviceDebounce: .milliseconds(50))
         try await withHarness(timings: timings) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             // Long enough for the first heartbeat exchange — which is the other
             // half of the guard — and a fraction of the 500ms warm-up.
             try await Task.sleep(for: .milliseconds(150))
@@ -596,7 +626,7 @@ struct ReceiverSessionTests {
 
             let early = await accessory.hostFrames.count { $0.message == CFDMessage.getMany.rawValue }
             #expect(early == 0, "the device ignores a query issued this soon after the session opens")
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot), "and the loop polls once the warm-up is over")
+            #expect(await harness.recorder.wait(until: sawSnapshot), "and the loop polls once the warm-up is over")
         }
     }
 
@@ -611,7 +641,7 @@ struct ReceiverSessionTests {
         // device does not — that silence is the whole hazard.
         try await withHarness(.init(answersRequests: false), timings: timings) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             try await Task.sleep(for: .milliseconds(150))
             let before = await harness.recorder.states.count
 
@@ -631,7 +661,7 @@ struct ReceiverSessionTests {
         // polling carried on, it would show.
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50), idlePoll: .seconds(2))) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
 
             await harness.session.setDisplayAsleep(true)
             let asleep = await harness.recorder.snapshots.count
@@ -645,7 +675,7 @@ struct ReceiverSessionTests {
     func displayWakePollsImmediately() async throws {
         try await withHarness(timings: Self.slowPolling) { harness, _ in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+            #expect(await harness.recorder.wait(until: sawSnapshot))
             await harness.session.setDisplayAsleep(true)
             let asleep = await harness.recorder.snapshots.count
 
@@ -661,7 +691,7 @@ struct ReceiverSessionTests {
     func recheckKeepsAHealthyLink() async throws {
         try await withHarness { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
 
             await harness.session.recheck()
 
@@ -674,7 +704,7 @@ struct ReceiverSessionTests {
     func recheckDropsADeadLink() async throws {
         try await withHarness(timings: ReceiverSession.Timings(deviceDebounce: .milliseconds(50))) { harness, accessory in
             harness.send(.arrived)
-            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            #expect(await harness.recorder.wait(until: reachedReady))
             await accessory.goQuiet()
 
             await harness.session.recheck()
@@ -682,28 +712,6 @@ struct ReceiverSessionTests {
             #expect(await harness.recorder.wait(timeout: .seconds(20)) { events in
                 events.contains { if case .state(.waitingToRetry) = $0 { true } else { false } }
             }, "a link that does not answer after wake must be rebuilt, not kept")
-        }
-    }
-
-    @Test("Quitting tells the receiver to stop the session, exactly once")
-    func shutdownStopsSessionOnce() async {
-        let accessory = FakeAccessory()
-        let harness = await SessionHarness { IAP2Link(transport: accessory, initialSequence: 0x40, sleeper: Clock.linkSleeper) }
-        harness.send(.arrived)
-        #expect(await harness.recorder.wait(until: Self.reachedReady))
-
-        await harness.finish()
-
-        #expect(await accessory.stopSessionCount == 1)
-    }
-
-    @Test("A write attempted while disconnected fails instead of hanging")
-    func writeWhileDisconnected() async throws {
-        try await withHarness { harness, _ in
-            await harness.session.set(.noiseCancellation, to: 1)
-
-            let result = try #require(await harness.recorder.writeResult(for: .noiseCancellation))
-            #expect(throws: SessionError.notReady) { try result.get() }
         }
     }
 }

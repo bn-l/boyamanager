@@ -371,8 +371,8 @@ struct IAP2LinkTests {
         await #expect(throws: (any Error).self, "the send in flight is pre-empted") { try await inFlight.value }
         await #expect(throws: (any Error).self, "and so is the one behind it") { try await queued.value }
         let packets = await accessory.hostPackets
-        let stop = packets.lastIndex {
-            ControlMessage(parsing: $0.payload)?.id == ControlMessage.ID.stopExternalAccessorySession.rawValue
+        let stop = packets.lastIndex { packet in
+            ControlMessage(parsing: packet.payload)?.id == ControlMessage.ID.stopExternalAccessorySession.rawValue
         }
         #expect(stop == packets.count - 1, "nothing may follow the message that ends the session")
     }

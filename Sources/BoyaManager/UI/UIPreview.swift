@@ -49,7 +49,11 @@ enum UIPreview {
             // Each tab on its own, at the size it asks for. A pane that has
             // outgrown its height shows it here as a scroller drawn across the
             // sections, which is the whole reason these get rendered.
-            try render(GeneralSettings(preferences: preferences, state: state), size: paneSize(430), to: directory.appending(path: "settings-general.png"))
+            try render(
+                GeneralSettings(preferences: preferences, state: state),
+                size: paneSize(430),
+                to: directory.appending(path: "settings-general.png")
+            )
             try render(DeviceSettings(state: state), size: paneSize(470), to: directory.appending(path: "settings-device.png"))
             try render(AdvancedSettings(state: state), size: paneSize(370), to: directory.appending(path: "settings-advanced.png"))
 
