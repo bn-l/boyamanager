@@ -48,6 +48,20 @@ icons:
     .build/debug/BoyaManager --render-icons /tmp/boyamanager-icons
     open /tmp/boyamanager-icons
 
+# Render the popover and every settings pane to /tmp/boyamanager-ui for inspection
+ui:
+    swift build
+    .build/debug/BoyaManager --render-ui /tmp/boyamanager-ui
+    open /tmp/boyamanager-ui
+
+# Regenerate the README screenshots (rendered in this Mac's current appearance)
+readme-images:
+    swift build
+    .build/debug/BoyaManager --render-ui /tmp/boyamanager-ui
+    @cp /tmp/boyamanager-ui/popover.png docs/popover.png
+    @cp /tmp/boyamanager-ui/popover-two-transmitters.png docs/popover-two-transmitters.png
+    @echo "updated docs/popover.png and docs/popover-two-transmitters.png"
+
 # Talk to the receiver from the terminal: handshake, dump every attribute, close
 probe:
     swift build
