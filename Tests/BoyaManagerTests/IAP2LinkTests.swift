@@ -351,6 +351,32 @@ struct IAP2LinkTests {
         #expect(stops == 1)
     }
 
+    /// Pre-empting the sender in flight frees the send lock, and hands it
+    /// straight to whoever queued behind it. That sender used to find `end`
+    /// still nil — `close()` does not set it until the StopEA has been written
+    /// — pass the guard, and put session data on the wire after the session had
+    /// been ended, moving `seq` out from under the close's own acknowledgement.
+    @Test("A send queued behind the close does not talk after StopEA")
+    func closeUnderContention() async throws {
+        let (link, accessory, _) = try await open()
+        await accessory.goQuiet()
+
+        let inFlight = Task { try await link.sendEA(Fixtures.getAllRequest) }
+        try await Task.sleep(for: .milliseconds(60))
+        let queued = Task { try await link.sendEA(Fixtures.getAllRequest) }
+        try await Task.sleep(for: .milliseconds(60))
+
+        await link.close()
+
+        await #expect(throws: (any Error).self, "the send in flight is pre-empted") { try await inFlight.value }
+        await #expect(throws: (any Error).self, "and so is the one behind it") { try await queued.value }
+        let packets = await accessory.hostPackets
+        let stop = packets.lastIndex {
+            ControlMessage(parsing: $0.payload)?.id == ControlMessage.ID.stopExternalAccessorySession.rawValue
+        }
+        #expect(stop == packets.count - 1, "nothing may follow the message that ends the session")
+    }
+
     /// Identification lands a moment before the RST, and `waitFor` used to
     /// check the condition before the reset flag — so identification "won",
     /// `open` carried on, and the failure surfaced later as something else.

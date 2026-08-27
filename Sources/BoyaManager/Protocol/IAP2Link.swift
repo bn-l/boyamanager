@@ -227,9 +227,13 @@ actor IAP2Link {
             )
             logger.debug("-> \(stop.name, privacy: .public)")
             seq = seq &+ 1
-            let packet = LinkPacket(control: .ack, seq: seq, ack: rack, session: session, payload: stop.encode())
+            // `seq` is actor state and the write below is a suspension point,
+            // so the number this waits for has to be taken now. Reading it back
+            // afterwards is reading whatever ran in between.
+            let stopSeq = seq
+            let packet = LinkPacket(control: .ack, seq: stopSeq, ack: rack, session: session, payload: stop.encode())
             try? await transport.write(packet.encode())
-            _ = await waitFor(.acknowledged(seq), timeout: .milliseconds(300))
+            _ = await waitFor(.acknowledged(stopSeq), timeout: .milliseconds(300))
         }
         isLinked = false
         end = end ?? .closed
@@ -405,7 +409,12 @@ actor IAP2Link {
     private func sendData(session: UInt8, payload: [UInt8], timeout: Duration = .seconds(1), retries: Int = 3) async throws {
         await acquireSendLock()
         defer { releaseSendLock() }
-        guard end == nil else { throw end == .reset ? LinkError.reset : LinkError.notLinked }
+        // `isClosing` as well as `end`: a sender that queued behind the one
+        // `close()` pre-empted takes the lock while the StopEA is still in
+        // flight, and `end` is not set until after it. Passing here would put
+        // session data on the wire after the session was ended and move `seq`
+        // out from under the close.
+        guard !isClosing, end == nil else { throw end == .reset ? LinkError.reset : LinkError.notLinked }
 
         seq = seq &+ 1
         let mySeq = seq
