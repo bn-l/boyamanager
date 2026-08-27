@@ -139,12 +139,10 @@ private struct AdvancedSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Pairing") {
-                Button("Start pairing…") { confirming = .rxPairEnable }
-                    .disabled(!state.connection.isReady)
-                Text(Attr.rxPairEnable.riskWarning ?? "").font(.caption).foregroundStyle(.secondary)
-            }
-
+            // No pairing button: rx_pair_en (70) is not implemented on a mini 2
+            // — the device answers status 1 and the id is absent from its
+            // metadata (PROTOCOL.md §9.6). A control that can only fail is
+            // worse than no control.
             Section("Speaker mode") {
                 Button(speakerButtonTitle) { confirming = .rxSpeaker }
                     .disabled(!state.isEnabled(.rxSpeaker))
@@ -194,7 +192,6 @@ private struct AdvancedSettings: View {
 
     private func apply(_ attr: Attr) {
         switch attr {
-        case .rxPairEnable: state.setRisky(.rxPairEnable, to: 1)
         case .rxSpeaker: state.setRisky(.rxSpeaker, to: (state.value(.rxSpeaker) ?? 0) != 0 ? 0 : 1)
         default: break
         }

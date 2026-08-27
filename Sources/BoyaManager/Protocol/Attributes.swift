@@ -197,6 +197,10 @@ enum Attr: UInt8, Sendable, CaseIterable {
         switch self {
         case .rxSpeaker: "Changing speaker mode restarts the receiver."
         case .rxReset: "This resets the receiver to factory defaults."
+        // Kept for the vocabulary, not for the UI: a mini 2 answers status 1
+        // for this id and does not list it (PROTOCOL.md §9.6), so nothing
+        // offers it. A model that does implement it would need a control that
+        // appears only when the device reports the attribute.
         case .rxPairEnable: "This puts the receiver into pairing mode and can drop the current transmitters."
         default: nil
         }
