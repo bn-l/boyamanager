@@ -38,6 +38,11 @@ enum SessionError: Error, Sendable, Equatable {
     case unavailable
     case outOfRange(UInt8, ClosedRange<UInt8>)
     case riskyWriteRefused
+    /// The write was taken and the read-back says something else. Reported
+    /// rather than published as a success, because a control that quietly
+    /// returns to where it was is the same thing the app shows when nothing
+    /// went wrong at all.
+    case notApplied(requested: UInt8, actual: UInt8)
 }
 
 enum SessionEvent: Sendable {
@@ -81,7 +86,7 @@ struct SessionTimings: Sendable {
     var heartbeatTimeout: Duration = .seconds(3)
 }
 
-    /// A request in flight. It is registered *before* the frame goes out,
+/// A request in flight. It is registered *before* the frame goes out,
 /// because the receiver can answer faster than the link acknowledges the
 /// packet that asked — a reply that lands before the caller starts waiting
 /// is parked in `received` rather than dropped.
@@ -782,7 +787,15 @@ extension ReceiverSession {
         logger.notice("Set \(attr.name, privacy: .public) = \(value, privacy: .public)")
         // Somebody is changing settings, so they are watching what happens.
         lastWrite = .now
-        _ = try? await request(.setAttribute, payload: [attr.rawValue, 1, value], node: .settings, link: link)
+        // The set reply carries a status of its own, and a refusal there is the
+        // device saying so in as many words. It was being thrown away, leaving
+        // the read-back to report the refusal as a value that had not moved.
+        let accepted = try? await request(.setAttribute, payload: [attr.rawValue, 1, value], node: .settings, link: link)
+        if let accepted, !AttributeSnapshot(decoding: accepted.payload).isAvailable {
+            logger.error("\(attr.name, privacy: .public) was refused by the set")
+            publish(.writeResult(attr, .failure(.unavailable)))
+            return
+        }
         guard let readBack = try? await request(.getAttribute, payload: [attr.rawValue], node: .settings, link: link) else {
             logger.error("No read-back for \(attr.name, privacy: .public)")
             publish(.writeResult(attr, .failure(.timeout)))
@@ -795,10 +808,20 @@ extension ReceiverSession {
             publish(.writeResult(attr, .failure(.unavailable)))
             return
         }
+        // What the receiver holds, whatever it turns out to be — the control
+        // has to end up on the value the device has, not the one asked for.
         snapshot = snapshot.merging(decoded)
+        publish(.snapshot(snapshot))
+        guard confirmed == value else {
+            logger.error("""
+                \(attr.name, privacy: .public) was asked for \(value, privacy: .public) \
+                and reads back \(confirmed, privacy: .public)
+                """)
+            publish(.writeResult(attr, .failure(.notApplied(requested: value, actual: confirmed))))
+            return
+        }
         logger.notice("\(attr.name, privacy: .public) confirmed \(confirmed, privacy: .public)")
         publish(.writeResult(attr, .success(confirmed)))
-        publish(.snapshot(snapshot))
     }
 }
 

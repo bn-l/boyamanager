@@ -155,6 +155,8 @@ final class MicState {
         case .unavailable: "\(attr.title) is not available right now."
         case let .outOfRange(value, range): "\(value) is outside \(range.lowerBound)…\(range.upperBound) for \(attr.title)."
         case .riskyWriteRefused: "\(attr.title) needs to be changed from Settings › Advanced."
+        case let .notApplied(requested, actual):
+            "\(attr.title) did not take \(attr.describe([requested])) — the receiver still reads \(attr.describe([actual]))."
         }
     }
 

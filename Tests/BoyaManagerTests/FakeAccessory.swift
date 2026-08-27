@@ -44,6 +44,11 @@ actor FakeAccessory: ByteTransport {
         var restartsOnSpeakerWrite = false
         /// `rx_reset` wipes it — same shape.
         var resetsOnFactoryReset = false
+        /// Attributes the set answers with status 1: the device saying no.
+        var refusesWrites: Set<UInt8> = []
+        /// Attributes whose set is answered as taken while the stored value
+        /// does not move — the write that looks fine and did nothing.
+        var ignoresWrites: Set<UInt8> = []
     }
 
     private let options: Options
@@ -241,7 +246,11 @@ actor FakeAccessory: ByteTransport {
                 // command is taken and the link goes away before it can answer.
                 let takesTheLinkWithIt = (options.restartsOnSpeakerWrite && id == Attr.rxSpeaker.rawValue)
                     || (options.resetsOnFactoryReset && id == Attr.rxReset.rawValue)
-                attributes[id] = frame.payload[2]
+                guard !options.refusesWrites.contains(id) else {
+                    sendFrames([reply(message: .setAttribute, id: id, status: 1)])
+                    continue
+                }
+                if !options.ignoresWrites.contains(id) { attributes[id] = frame.payload[2] }
                 if takesTheLinkWithIt {
                     resetLink()
                     continue
@@ -253,8 +262,8 @@ actor FakeAccessory: ByteTransport {
         }
     }
 
-    private func reply(message: CFDMessage, id: UInt8) -> [UInt8] {
-        let payload: [UInt8] = attributes[id].map { [0, id, 1, $0] } ?? [1, id]
+    private func reply(message: CFDMessage, id: UInt8, status: UInt8 = 0) -> [UInt8] {
+        let payload: [UInt8] = status == 0 ? (attributes[id].map { [0, id, 1, $0] } ?? [1, id]) : [status, id]
         return CFDLink.encode(
             message: message,
             seq: 1,

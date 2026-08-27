@@ -157,6 +157,41 @@ struct ReceiverSessionTests {
         }
     }
 
+    /// The read-back proves what the receiver holds. It only proves the write
+    /// worked if it holds what was asked for — otherwise a refused write is
+    /// published as a success at the old value, which clears the error and
+    /// leaves the control quietly back where it started.
+    @Test("A write the receiver did not take is reported, not published as a success")
+    func writeThatDidNotTakeIsReported() async throws {
+        try await withHarness(.init(ignoresWrites: [Attr.noiseCancellation.rawValue])) { harness, accessory in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            let before = try #require(await accessory.attributes[Attr.noiseCancellation.rawValue])
+
+            await harness.session.set(.noiseCancellation, to: 1)
+
+            let result = try #require(await harness.recorder.writeResult(for: .noiseCancellation))
+            #expect(throws: SessionError.notApplied(requested: 1, actual: before)) { try result.get() }
+        }
+    }
+
+    @Test("A set the receiver answers with status 1 is a refusal, and is not read back for")
+    func refusedWriteIsReported() async throws {
+        try await withHarness(.init(refusesWrites: [Attr.rxGain.rawValue])) { harness, accessory in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.reachedReady))
+
+            await harness.session.set(.rxGain, to: 2)
+
+            let result = try #require(await harness.recorder.writeResult(for: .rxGain))
+            #expect(throws: SessionError.unavailable) { try result.get() }
+            let reads = await accessory.hostFrames.count {
+                $0.message == CFDMessage.getAttribute.rawValue && $0.payload.first == Attr.rxGain.rawValue
+            }
+            #expect(reads == 0, "the device already said no; reading it back only asks again")
+        }
+    }
+
     @Test("A value outside the device's range is refused before it reaches the wire")
     func rejectsOutOfRange() async throws {
         try await withHarness { harness, accessory in
