@@ -14,11 +14,27 @@ struct SettingsView: View {
             AdvancedSettings(state: state)
                 .tabItem { Label("Advanced", systemImage: "exclamationmark.triangle") }
         }
-        .frame(width: 460, height: 380)
     }
 }
 
-private struct GeneralSettings: View {
+/// Settings panes size themselves and the window follows, the way System
+/// Settings does. A fixed height on the `TabView` gave every tab the tallest
+/// one's height and left the shortest padded out — and a grouped `Form` is a
+/// list-backed scroll view, so the tab that outgrew that height scrolled, with
+/// the scroller drawn across the inset sections.
+private let settingsWidth: CGFloat = 460
+
+extension View {
+    fileprivate func settingsPane(height: CGFloat) -> some View {
+        formStyle(.grouped)
+            .scrollDisabled(true)
+            .frame(width: settingsWidth, height: height)
+    }
+}
+
+/// Rendered on its own by `--render-ui`, which is how the pane heights get
+/// checked, so these are not private.
+struct GeneralSettings: View {
     @Bindable var preferences: Preferences
     @Bindable var state: MicState
 
@@ -27,14 +43,13 @@ private struct GeneralSettings: View {
             Section {
                 Toggle("Launch at login", isOn: $preferences.launchAtLogin)
                 // Registration can succeed and still not run: macOS parks it
-                // until the user confirms. Saying so beats a toggle that looks
-                // on and does nothing.
-                if preferences.loginItem == .needsApproval {
-                    LabeledContent("") {
-                        HStack {
-                            Text("Waiting for your approval in System Settings.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                // until the user confirms. A permanent line rather than one
+                // that appears when it has something to say — a row that comes
+                // and goes changes the height of a pane that has a fixed one.
+                LabeledContent("Status") {
+                    HStack {
+                        Text(loginStatus).font(.caption).foregroundStyle(.secondary)
+                        if preferences.loginItem == .needsApproval {
                             Button("Open Login Items…") { preferences.openLoginItemsSettings() }
                         }
                     }
@@ -49,12 +64,10 @@ private struct GeneralSettings: View {
                     }
                 // Switching the toggle on cannot override a refusal, and the
                 // app has no way to ask again once it has been made.
-                if state.notificationPermission == .denied {
-                    LabeledContent("") {
-                        HStack {
-                            Text("Notifications are turned off for BoyaManager in System Settings.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                LabeledContent("Permission") {
+                    HStack {
+                        Text(notificationStatus).font(.caption).foregroundStyle(.secondary)
+                        if state.notificationPermission == .denied {
                             Button("Open…") { state.openNotificationSettings() }
                         }
                     }
@@ -75,15 +88,33 @@ private struct GeneralSettings: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .settingsPane(height: 430)
         // Both of these can be revoked in System Settings while the app runs,
         // and nothing tells the app about it.
         .onAppear { preferences.refreshLoginItem() }
         .task { await state.refreshNotificationPermission() }
     }
+
+    private var loginStatus: String {
+        switch preferences.loginItem {
+        case .on: "Registered."
+        case .off: "Not registered."
+        case .needsApproval: "Waiting for your approval in System Settings."
+        }
+    }
+
+    private var notificationStatus: String {
+        switch state.notificationPermission {
+        case .allowed: "Allowed."
+        case .denied: "Turned off for BoyaManager in System Settings."
+        case .undetermined: "Not asked yet — the first one will ask."
+        }
+    }
 }
 
-private struct DeviceSettings: View {
+/// Rendered on its own by `--render-ui`, which is how the pane heights get
+/// checked, so these are not private.
+struct DeviceSettings: View {
     @Bindable var state: MicState
 
     var body: some View {
@@ -106,7 +137,7 @@ private struct DeviceSettings: View {
                 Text(state.statusLine).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .settingsPane(height: 470)
     }
 }
 
@@ -126,7 +157,9 @@ private struct AttributeToggle: View {
 /// Everything here has a consequence beyond changing a setting, so each action
 /// spells out what it does and asks first. These are the only callers of
 /// `MicState.setRisky`.
-private struct AdvancedSettings: View {
+/// Rendered on its own by `--render-ui`, which is how the pane heights get
+/// checked, so these are not private.
+struct AdvancedSettings: View {
     @Bindable var state: MicState
     @State private var confirming: Attr?
     @State private var confirmingReset = false
@@ -155,7 +188,7 @@ private struct AdvancedSettings: View {
                 Text(Attr.rxReset.riskWarning ?? "").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .settingsPane(height: 370)
         .confirmationDialog(
             confirming?.title ?? "",
             isPresented: Binding(get: { confirming != nil && !confirmingReset }, set: { if !$0 { confirming = nil } }),

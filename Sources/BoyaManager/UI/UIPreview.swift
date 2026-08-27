@@ -46,11 +46,12 @@ enum UIPreview {
             state.apply(.state(.ready))
             state.apply(.identified(previewIdentity))
             state.apply(.snapshot(sampleSnapshot))
-            try render(
-                SettingsView(preferences: preferences, state: state),
-                size: NSSize(width: 460, height: 380),
-                to: directory.appending(path: "settings.png")
-            )
+            // Each tab on its own, at the size it asks for. A pane that has
+            // outgrown its height shows it here as a scroller drawn across the
+            // sections, which is the whole reason these get rendered.
+            try render(GeneralSettings(preferences: preferences, state: state), size: paneSize(430), to: directory.appending(path: "settings-general.png"))
+            try render(DeviceSettings(state: state), size: paneSize(470), to: directory.appending(path: "settings-device.png"))
+            try render(AdvancedSettings(state: state), size: paneSize(370), to: directory.appending(path: "settings-advanced.png"))
 
             let disconnected = MicState(preferences: preferences)
             disconnected.apply(.state(.failed(.claimFailed)))
@@ -59,6 +60,10 @@ enum UIPreview {
         } catch {
             logger.error("UI preview failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private static func paneSize(_ height: CGFloat) -> NSSize {
+        NSSize(width: 460, height: height)
     }
 
     private static func popover(_ preferences: Preferences, _ snapshot: AttributeSnapshot) -> PopoverView {
