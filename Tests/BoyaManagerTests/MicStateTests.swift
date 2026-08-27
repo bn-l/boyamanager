@@ -271,6 +271,48 @@ struct MicStateTests {
         #expect(state.notificationPermission == .allowed)
     }
 
+    /// The first-run hole: the preference ships on, so the toggle that asks is
+    /// never touched, and the app runs forever with permission undetermined.
+    @Test("A fresh install with notifications on asks at startup")
+    func firstRunAsksForPermission() async {
+        let centre = FakeNotificationCentre(permission: .undetermined)
+        let state = await makeState(centre: centre)
+
+        await state.prepareNotifications()
+
+        #expect(centre.requestCount == 1, "nothing else in the app ever asks")
+        #expect(state.notificationPermission == .allowed)
+    }
+
+    @Test("Startup does not ask when notifications are switched off, or when the answer is already in")
+    func startupAsksOnlyWhenItWouldBeUsed() async {
+        let off = FakeNotificationCentre(permission: .undetermined)
+        await makeState(notifications: false, centre: off).prepareNotifications()
+        #expect(off.requestCount == 0, "asking for something the user turned off is a prompt for nothing")
+
+        let decided = FakeNotificationCentre(permission: .denied)
+        await makeState(centre: decided).prepareNotifications()
+        #expect(decided.requestCount == 0, "the system answers once and this is that answer")
+    }
+
+    /// A level, not an edge — so it can be re-armed, unlike a connect that has
+    /// already happened.
+    @Test("A low-battery warning blocked by permission is shown once permission arrives")
+    func blockedWarningIsRearmed() async {
+        let centre = FakeNotificationCentre(permission: .denied)
+        let state = await makeState(centre: centre)
+        state.apply(.state(.ready))
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 3])))
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 1])))
+        #expect(state.notificationLog.isEmpty)
+
+        centre.current = .allowed
+        await state.refreshNotificationPermission()
+        state.apply(.snapshot(snapshot([.tx2Online: 1, .tx2Battery: 1])))
+
+        #expect(state.notificationLog.count { $0.contains("battery low") } == 1)
+    }
+
     @Test("Permission revoked in System Settings is picked up on the next look")
     func revokedPermissionIsNoticed() async {
         let centre = FakeNotificationCentre(permission: .allowed)

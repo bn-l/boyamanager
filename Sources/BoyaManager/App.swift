@@ -104,7 +104,7 @@ final class AppController {
     func start() {
         logger.notice("BoyaManager starting")
         isDarkAppearance = NSApp.effectiveAppearance.isDark
-        Task { await state.refreshNotificationPermission() }
+        Task { await state.prepareNotifications() }
         appearanceObserver = AppearanceObserver { [weak self] isDark in
             self?.isDarkAppearance = isDark
         }

@@ -294,7 +294,19 @@ final class MicState {
     /// is what this used to do, meant a refusal was rediscovered and logged on
     /// every single event and the content thrown away each time.
     func refreshNotificationPermission() async {
-        notificationPermission = await notifications.permission()
+        record(await notifications.permission())
+    }
+
+    /// Startup. Notifications are on by default, so on a machine that has never
+    /// heard of this app nothing would ever ask: the Settings toggle is the only
+    /// caller of `enableNotifications()` and a preference that starts on never
+    /// changes. Permission stayed undetermined and every notification was
+    /// dropped — the same silence the prompt exists to prevent.
+    func prepareNotifications() async {
+        await refreshNotificationPermission()
+        guard preferences.notificationsEnabled, notificationPermission == .undetermined else { return }
+        logger.notice("Notifications are on and unauthorized — asking")
+        record(await notifications.requestPermission())
     }
 
     /// Asks, once, when the user switches notifications on — which is a moment
@@ -302,9 +314,20 @@ final class MicState {
     /// the prompt at an arbitrary point, and a prompt that is missed leaves
     /// every notification after it silently dropped.
     func enableNotifications() async {
-        notificationPermission = notificationPermission == .undetermined
+        record(notificationPermission == .undetermined
             ? await notifications.requestPermission()
-            : await notifications.permission()
+            : await notifications.permission())
+    }
+
+    /// A low battery is a level, not an edge: the warning is armed once per
+    /// online period, and arming it while nothing could be posted spent the
+    /// only warning on a notification the user never saw. Permission arriving
+    /// afterwards re-arms it, so the next poll says what the last one could not.
+    private func record(_ permission: NotificationPermission) {
+        let wasBlocked = notificationPermission != .allowed
+        notificationPermission = permission
+        guard permission == .allowed, wasBlocked else { return }
+        lowBatteryNotified = []
     }
 
     func openNotificationSettings() {
