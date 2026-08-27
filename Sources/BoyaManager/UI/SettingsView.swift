@@ -18,17 +18,22 @@ struct SettingsView: View {
 }
 
 /// Settings panes size themselves and the window follows, the way System
-/// Settings does. A fixed height on the `TabView` gave every tab the tallest
-/// one's height and left the shortest padded out — and a grouped `Form` is a
-/// list-backed scroll view, so the tab that outgrew that height scrolled, with
-/// the scroller drawn across the inset sections.
+/// Settings does.
+///
+/// A fixed height gave every tab the same one — the tallest tab scrolled,
+/// because a grouped `Form` is a list-backed scroll view, with the overlay
+/// scroller drawn across the inset sections; and stating a height per pane
+/// only moved the problem, because the tab bar comes out of that height and
+/// the last card ended up against the bottom edge. `fixedSize` lets the form
+/// state what it needs and the window takes it from there.
 private let settingsWidth: CGFloat = 460
 
 extension View {
-    fileprivate func settingsPane(height: CGFloat) -> some View {
+    fileprivate func settingsPane() -> some View {
         formStyle(.grouped)
             .scrollDisabled(true)
-            .frame(width: settingsWidth, height: height)
+            .frame(width: settingsWidth)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -88,7 +93,7 @@ struct GeneralSettings: View {
                 }
             }
         }
-        .settingsPane(height: 430)
+        .settingsPane()
         // Both of these can be revoked in System Settings while the app runs,
         // and nothing tells the app about it.
         .onAppear { preferences.refreshLoginItem() }
@@ -137,7 +142,7 @@ struct DeviceSettings: View {
                 Text(state.statusLine).font(.caption).foregroundStyle(.secondary)
             }
         }
-        .settingsPane(height: 470)
+        .settingsPane()
     }
 }
 
@@ -188,7 +193,7 @@ struct AdvancedSettings: View {
                 Text(Attr.rxReset.riskWarning ?? "").font(.caption).foregroundStyle(.secondary)
             }
         }
-        .settingsPane(height: 370)
+        .settingsPane()
         .confirmationDialog(
             confirming?.title ?? "",
             isPresented: Binding(get: { confirming != nil && !confirmingReset }, set: { if !$0 { confirming = nil } }),

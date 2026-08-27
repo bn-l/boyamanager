@@ -42,14 +42,14 @@ enum BoyaManagerMain {
 struct BoyaManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self)
     private var delegate
-    @Environment(\.openSettings)
-    private var openSettings
 
+    /// No `Settings` scene: the window it makes cannot be told to float, and
+    /// this one is opened from a menu bar item with the user's real work in
+    /// front of it. `SettingsWindowController` owns it instead.
     var body: some Scene {
         MenuBarExtra {
             PopoverView(state: Shared.controller.state) {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
+                Shared.controller.showSettings()
             }
         } label: {
             Image(nsImage: Shared.controller.menuBarImage)
@@ -57,10 +57,6 @@ struct BoyaManagerApp: App {
                 .help(Shared.controller.state.tooltip)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView(preferences: Shared.controller.preferences, state: Shared.controller.state)
-        }
     }
 }
 
@@ -86,11 +82,18 @@ final class AppController {
     /// for the life of the process, firing at a session that has been shut
     /// down.
     private var workspaceObservers: [any NSObjectProtocol] = []
+    private let settingsWindow: SettingsWindowController
 
     init() {
         let preferences = Preferences()
+        let state = MicState(preferences: preferences)
         self.preferences = preferences
-        state = MicState(preferences: preferences)
+        self.state = state
+        settingsWindow = SettingsWindowController(preferences: preferences, state: state)
+    }
+
+    func showSettings() {
+        settingsWindow.show()
     }
 
     /// The menu bar label. Reading `state` and `preferences` here is what makes

@@ -31,19 +31,7 @@ struct PopoverView: View {
             Text(state.identity?.model ?? "BOYA mini 2")
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
-            VStack(alignment: .trailing, spacing: 1) {
-                StatusPill(state: state.connection) { state.retry() }
-                // "Connected" is about the link. Everything else on screen came
-                // from a poll, and a link that is up while the polls time out
-                // shows numbers minutes old with nothing to say so. `.relative`
-                // keeps counting on its own — a string formatted here would sit
-                // at "0s ago" until the next poll redrew it.
-                if let updated = state.lastUpdate {
-                    Text("updated \(updated, style: .relative) ago")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
-            }
+            StatusPill(state: state.connection) { state.retry() }
         }
     }
 

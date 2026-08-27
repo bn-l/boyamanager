@@ -46,16 +46,13 @@ enum UIPreview {
             state.apply(.state(.ready))
             state.apply(.identified(previewIdentity))
             state.apply(.snapshot(sampleSnapshot))
-            // Each tab on its own, at the size it asks for. A pane that has
-            // outgrown its height shows it here as a scroller drawn across the
-            // sections, which is the whole reason these get rendered.
-            try render(
-                GeneralSettings(preferences: preferences, state: state),
-                size: paneSize(430),
-                to: directory.appending(path: "settings-general.png")
-            )
-            try render(DeviceSettings(state: state), size: paneSize(470), to: directory.appending(path: "settings-device.png"))
-            try render(AdvancedSettings(state: state), size: paneSize(370), to: directory.appending(path: "settings-advanced.png"))
+            // Each tab on its own and then the tabbed view, every one at the
+            // size it asks for — which is the size the window will give it, so
+            // a pane whose last card is against the bottom edge shows it here.
+            try renderPane(GeneralSettings(preferences: preferences, state: state), "settings-general.png", to: directory)
+            try renderPane(DeviceSettings(state: state), "settings-device.png", to: directory)
+            try renderPane(AdvancedSettings(state: state), "settings-advanced.png", to: directory)
+            try renderPane(SettingsView(preferences: preferences, state: state), "settings.png", to: directory)
 
             let disconnected = MicState(preferences: preferences)
             disconnected.apply(.state(.failed(.claimFailed)))
@@ -66,8 +63,15 @@ enum UIPreview {
         }
     }
 
-    private static func paneSize(_ height: CGFloat) -> NSSize {
-        NSSize(width: 460, height: height)
+    /// Measured the way `SettingsWindowController` measures its window: a
+    /// hosting controller reporting the content's preferred size.
+    private static func renderPane(_ view: some View, _ name: String, to directory: URL) throws {
+        let controller = NSHostingController(rootView: view)
+        controller.sizingOptions = [.preferredContentSize]
+        controller.view.layoutSubtreeIfNeeded()
+        let size = controller.preferredContentSize
+        print("\(name): \(Int(size.width))x\(Int(size.height))")
+        try render(view, size: size, to: directory.appending(path: name))
     }
 
     private static func popover(_ preferences: Preferences, _ snapshot: AttributeSnapshot) -> PopoverView {
