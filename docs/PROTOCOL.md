@@ -547,9 +547,22 @@ what the name suggests.**
 | Core Audio | one device, `input: 2` | **two** devices: `output: 2` and `input: 2` |
 | macOS Sound pane | input only | "BOYA mini 2" under Output, "BOYA mini 2 USB" under Input |
 
-So `1` is input-only — the receiver monitors through its own speaker — and `0` presents
-a second class-1 subclass-2 streaming interface, which is what a host needs to send
-audio *to* the receiver. Adding an interface means re-enumerating, which is the restart.
+So `1` is input-only and `0` presents a second class-1 subclass-2 streaming interface,
+which is what a host needs in order to send audio *to* the device. Adding an interface
+means re-enumerating, which is the restart.
+
+**Why BOYA calls it "speaker" is still unknown, and the obvious reading is wrong.** A
+mini 2 RX is a USB-C stub with no speaker and no jack, so there is nothing on the device
+for playback to come out of. What the attribute demonstrably controls is whether the
+receiver advertises a playback endpoint to the *host* — in USB audio terms an output
+terminal, which the spec's own terminal type for the common case is called Speaker. Note
+also that this device already has form for inverted flags: `tx*_online` reads `1` as
+online against BOYA's own label (§9.5).
+
+Open, and cheap to answer: where audio written to that endpoint actually goes. Play into
+it and listen — at the transmitters, in a recording, anywhere. It may be a monitor path,
+it may exist only so that conferencing apps which bind one device for both directions
+can select the receiver, or it may go nowhere at all.
 
 Two things worth knowing before writing it. macOS made the new output device the
 **system default output** on its own (`coreaudio_default_audio_output_device`), so a
