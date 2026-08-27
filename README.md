@@ -50,7 +50,7 @@ may use the same protocol with a different set of attributes but I haven't teste
 ## Install
 
 ```sh
-brew install --cask bn-l/tap/boyamanager
+brew install bn-l/tap/boyamanager
 ```
 
 ## Settings
