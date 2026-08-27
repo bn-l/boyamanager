@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="200" viewBox="0 0 440 200" role="img" aria-label="The menu bar icon: a hollow B, struck through while no receiver is present, then brightening when the receiver connects, then filling with four battery bars and a dot for the transmitter that comes online, then emptying again">
+  <defs>
+    <style><![CDATA[
+      svg {
+        overflow: hidden;
+        background: transparent;
+      }
+
+      /* One 8s loop for every element, so the phases stay in step. It walks the
+         app's three ink levels in order and back again:
+           0–7%     no receiver: faintest, struck through
+           9–15%    receiver connected, no transmitter online: brighter, empty
+           17%      a transmitter comes online: full strength, first bar
+           23 / 29 / 35%        bars two, three, four
+           42%      the dot for that transmitter
+           58%      the dot goes out first
+           63 / 68 / 73 / 78%   the bars come down, top one first
+           82–88%   back to no transmitter online
+           90%      struck through again, and hold                            */
+      .badge, .strike, .bar, .dot {
+        animation-duration: 8s;
+        animation-timing-function: ease-in-out;
+        animation-iteration-count: infinite;
+      }
+
+      .badge  { animation-name: lit }
+      .strike { animation-name: struck }
+      .dot    { animation-name: dot }
+
+      .bar1 { animation-name: bar1 }
+      .bar2 { animation-name: bar2 }
+      .bar3 { animation-name: bar3 }
+      .bar4 { animation-name: bar4 }
+
+      /* The three alphas are the app's own: 0.4 with no receiver, 0.6 with a
+         receiver but no transmitter online, 1 with one online. */
+      @keyframes lit    { 0%,7% { opacity:.4 } 9%,15% { opacity:.6 } 17%,80% { opacity:1 } 82%,88% { opacity:.6 } 90%,100% { opacity:.4 } }
+      @keyframes struck { 0%,7% { opacity:1 }  9%,88% { opacity:0 }  90%,100% { opacity:1 } }
+
+      @keyframes bar1 { 0%,15.5% { opacity:0 } 17%,76.5% { opacity:1 } 78%,100% { opacity:0 } }
+      @keyframes bar2 { 0%,21.5% { opacity:0 } 23%,71.5% { opacity:1 } 73%,100% { opacity:0 } }
+      @keyframes bar3 { 0%,27.5% { opacity:0 } 29%,66.5% { opacity:1 } 68%,100% { opacity:0 } }
+      @keyframes bar4 { 0%,33.5% { opacity:0 } 35%,61.5% { opacity:1 } 63%,100% { opacity:0 } }
+      @keyframes dot  { 0%,40.5% { opacity:0 } 42%,56.5% { opacity:1 } 58%,100% { opacity:0 } }
+
+      /* Resting on the state the inline opacities already draw: lit, full
+         battery, one transmitter online. */
+      @media (prefers-reduced-motion: reduce) {
+        .badge, .strike, .bar, .dot { animation: none !important; }
+      }
+    ]]></style>
+  </defs>
+
+  <rect x="1" y="1" width="438" height="198" rx="22" fill="#16171a" stroke="#2e3138" stroke-width="2"/>
+
+  <!-- 21 × 18 points, drawn at 8×, centred. The numbers are MicBadgeIcon.Geometry,
+       with y flipped: AppKit draws from the bottom left, SVG from the top left. -->
+  <g class="badge" transform="translate(136 28) scale(8)" fill="#ffffff" stroke="#ffffff" opacity="1">
+
+    <!-- One closed stroke: stem, top edge, upper lobe, waist notch, lower lobe,
+         bottom edge. No bar across the middle, so the battery needs no clipping. -->
+    <path d="M3.8 16.2 L3.8 1.8 L9.6 1.8
+             C12.196 1.8 14.3 3.322 14.3 5.2
+             C14.3 7.078 13.091 8.6 11.6 8.6
+             C13.588 8.6 15.2 10.301 15.2 12.4
+             C15.2 14.499 12.962 16.2 10.2 16.2 Z"
+          fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+
+    <!-- Battery, filling from the bottom of the hollow -->
+    <rect class="bar bar1" x="5.9" y="12.125" width="4.7" height="1.7" rx="0.4" stroke="none" opacity="1"/>
+    <rect class="bar bar2" x="5.9" y="9.475"  width="4.7" height="1.7" rx="0.4" stroke="none" opacity="1"/>
+    <rect class="bar bar3" x="5.9" y="6.825"  width="4.7" height="1.7" rx="0.4" stroke="none" opacity="1"/>
+    <rect class="bar bar4" x="5.9" y="4.175"  width="4.7" height="1.7" rx="0.4" stroke="none" opacity="1"/>
+
+    <!-- One dot per online transmitter, in the column the letter never reaches -->
+    <circle class="dot" cx="18.6" cy="2.4" r="2" stroke="none" opacity="1"/>
+
+    <!-- The gap under the strike is punched in the panel colour, the way the app
+         punches it with a destination-out pass. -->
+    <path class="strike" d="M1.5 15.5 L16.5 2.5" fill="none" stroke="#16171a" stroke-width="3.4" stroke-linecap="round" opacity="0"/>
+    <path class="strike" d="M1.5 15.5 L16.5 2.5" fill="none" stroke-width="1.5" stroke-linecap="round" opacity="0"/>
+  </g>
+</svg>

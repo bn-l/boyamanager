@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="70" height="60" viewBox="-2 -2 25 22" role="img" aria-label="Receiver connected, no transmitter online">
+  <rect x="-2" y="-2" width="25" height="22" rx="3.5" fill="#16171a"/>
+  <g fill="#ffffff" stroke="#ffffff" opacity="0.6">
+    <path d="M3.8 16.2 L3.8 1.8 L9.6 1.8 C12.196 1.8 14.3 3.322 14.3 5.2 C14.3 7.078 13.091 8.6 11.6 8.6 C13.588 8.6 15.2 10.301 15.2 12.4 C15.2 14.499 12.962 16.2 10.2 16.2 Z" fill="none" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  </g>
+</svg>
