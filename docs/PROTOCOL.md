@@ -533,11 +533,29 @@ update that starts answering shows up as a failure rather than silently.
 **`tx_auto_poweroff` (45) — verified writable.** Set, read back and restored on
 hardware by `BoyaManager`'s `HardwareTests`.
 
-**`rx_speaker`.** BOYA calls it "RX Speaker Mode" and the app warns *"Changing speaker
-mode will restart the device."* Its actual effect is **unknown** — no enumeration or
-description exists in any source. A plausible but untested hypothesis is that it
-changes the USB audio descriptor the receiver presents (the mini 2 currently
-enumerates as 2-channel input only), which would explain a restart.
+**`rx_speaker` (69) — resolved on hardware.** BOYA calls it "RX Speaker Mode" and the
+app warns *"Changing speaker mode will restart the device."* No enumeration or
+description exists in any source, so it was measured instead: the USB descriptors were
+captured either side of a write, on 27 Aug 2026.
+
+**It adds or removes a USB audio playback stream, and the polarity is the opposite of
+what the name suggests.**
+
+| | `rx_speaker = 1` | `rx_speaker = 0` |
+|---|---|---|
+| USB interfaces | 0 HID, 1 iAP, 2 audio control, **3 audio streaming** | the same, **plus 4 audio streaming** |
+| Core Audio | one device, `input: 2` | **two** devices: `output: 2` and `input: 2` |
+| macOS Sound pane | input only | "BOYA mini 2" under Output, "BOYA mini 2 USB" under Input |
+
+So `1` is input-only — the receiver monitors through its own speaker — and `0` presents
+a second class-1 subclass-2 streaming interface, which is what a host needs to send
+audio *to* the receiver. Adding an interface means re-enumerating, which is the restart.
+
+Two things worth knowing before writing it. macOS made the new output device the
+**system default output** on its own (`coreaudio_default_audio_output_device`), so a
+write silently moves where the user's audio is going. And the device drops off the bus
+for about three seconds: measured `rx_speaker accepted` → removal 70 ms later →
+re-enumeration at 2.9 s → session ready at 4.3 s.
 
 ### 9.6 Ids in the family table that are **not** on a mini 2
 
@@ -951,8 +969,9 @@ sudo .venv/bin/python boyactl.py --transport libusb getall   # old route, interf
 
 ## 16. Open questions
 
-* What `rx_speaker` (69) actually does. It restarts the receiver, so it was not
-  tried; diffing the USB descriptors either side of a toggle would answer it.
+* ~~What `rx_speaker` (69) actually does~~ — **resolved** by diffing the USB
+  descriptors either side of a write; see §9.5. It adds a second audio streaming
+  interface, and `0`, not `1`, is the setting that gives the host an output device.
 * Whether `tx1_wave` / `tx2_wave` (7, 27) are settable — they assign a transmitter to
   the Left or Right channel, but BOYA's own name for them is "Sound wave *display*".
 * ~~The polarity of `tx1_online` / `tx2_online`~~ — **resolved**, `1 = online`; see §9.5.

@@ -195,7 +195,13 @@ enum Attr: UInt8, Sendable, CaseIterable {
     /// confirmation in Settings › Advanced and `ReceiverSession.setRisky`.
     var riskWarning: String? {
         switch self {
-        case .rxSpeaker: "Changing speaker mode restarts the receiver."
+        // No markdown: these are plain strings, and SwiftUI only styles a
+        // LocalizedStringKey, so asterisks would be drawn as asterisks.
+        case .rxSpeaker: """
+            Off gives the Mac a second audio device to play into the receiver, and \
+            macOS may make it your system output. The receiver restarts either way, \
+            dropping off the bus for about three seconds.
+            """
         case .rxReset: "This resets the receiver to factory defaults."
         // Kept for the vocabulary, not for the UI: a mini 2 answers status 1
         // for this id and does not list it (PROTOCOL.md §9.6), so nothing

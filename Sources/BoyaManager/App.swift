@@ -68,6 +68,10 @@ struct BoyaManagerApp: App {
         // The panes state the height they need; this is what stops the window
         // deciding otherwise.
         .windowResizability(.contentSize)
+        // Where it opens the first time. Once it has been moved, macOS restores
+        // where the user left it, which is the behaviour they expect from every
+        // other window.
+        .defaultPosition(.center)
     }
 }
 
