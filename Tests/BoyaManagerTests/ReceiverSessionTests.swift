@@ -508,6 +508,31 @@ struct ReceiverSessionTests {
         }
     }
 
+    /// The attention span used to be the one delay in the session measured on
+    /// `ContinuousClock` while every other went through the injected sleeper —
+    /// so on a compressed clock it was five real seconds long, and a test could
+    /// never see it end.
+    @Test("The attention a write buys runs out on the session's own clock")
+    func attentionSpanRunsOut() async throws {
+        let timings = ReceiverSession.Timings(deviceDebounce: .milliseconds(50), attentionSpan: .seconds(2))
+        try await withHarness(timings: timings) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot))
+
+            await harness.session.set(.noiseCancellation, to: 1)
+            _ = await harness.recorder.writeResult(for: .noiseCancellation)
+            // Two seconds on the session's clock is 200ms here; wait out twice
+            // that, then count what the loop does afterwards.
+            try await Task.sleep(for: .milliseconds(400))
+
+            let start = await harness.recorder.snapshots.count
+            try await Task.sleep(for: .milliseconds(500))
+            let after = await harness.recorder.snapshots.count - start
+
+            #expect(after <= 1, "the write was long over, but the loop still polled \(after) times")
+        }
+    }
+
     /// A slow interval far longer than the assertion window, so "polled at
     /// once" cannot be confused with "the loop came round again".
     private static let slowPolling = ReceiverSession.Timings(
@@ -549,6 +574,54 @@ struct ReceiverSessionTests {
             #expect(await harness.recorder.wait(timeout: .seconds(3)) { events in
                 events.count { if case .snapshot = $0 { true } else { false } } >= before + 2
             }, "the loop kept waiting out an interval nobody asked for any more")
+        }
+    }
+
+    /// The out-of-band poll checked that a heartbeat had been answered but not
+    /// that the warm-up was over. Opening the popover in the first second after
+    /// `ready` — plug in, click — sent a query the device ignores, and held the
+    /// request lock for the whole timeout waiting for the answer, delaying the
+    /// loop's first real poll by more than the popover saved.
+    @Test("Opening the popover during the warm-up does not poll early")
+    func popoverWaitsForTheWarmUp() async throws {
+        let timings = ReceiverSession.Timings(warmUp: .seconds(5), deviceDebounce: .milliseconds(50))
+        try await withHarness(timings: timings) { harness, accessory in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            // Long enough for the first heartbeat exchange — which is the other
+            // half of the guard — and a fraction of the 500ms warm-up.
+            try await Task.sleep(for: .milliseconds(150))
+
+            await harness.session.setPopoverVisible(true)
+
+            let early = await accessory.hostFrames.count { $0.message == CFDMessage.getMany.rawValue }
+            #expect(early == 0, "the device ignores a query issued this soon after the session opens")
+            #expect(await harness.recorder.wait(until: Self.sawSnapshot), "and the loop polls once the warm-up is over")
+        }
+    }
+
+    /// The receiver re-enumerates when the Mac wakes, so a wake is likely to
+    /// find a link that has only just come up. The recheck reads no answer as
+    /// a dead link — and the device answers nothing during the warm-up — so
+    /// asking that early tore down the connection that had just been made.
+    @Test("A wake during the warm-up does not tear down the new link")
+    func recheckWaitsForTheWarmUp() async throws {
+        let timings = ReceiverSession.Timings(warmUp: .seconds(5), deviceDebounce: .milliseconds(50))
+        // Silent, because the fake answers during the warm-up and the real
+        // device does not — that silence is the whole hazard.
+        try await withHarness(.init(answersRequests: false), timings: timings) { harness, _ in
+            harness.send(.arrived)
+            #expect(await harness.recorder.wait(until: Self.reachedReady))
+            try await Task.sleep(for: .milliseconds(150))
+            let before = await harness.recorder.states.count
+
+            await harness.session.recheck()
+            try await Task.sleep(for: .milliseconds(200))
+
+            #expect(
+                await harness.recorder.states.count == before,
+                "the link was dropped over a question the device was never going to answer"
+            )
         }
     }
 

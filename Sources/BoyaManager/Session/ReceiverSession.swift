@@ -142,7 +142,15 @@ actor ReceiverSession {
     private var nextRequestID: UInt64 = 0
     private var isPopoverVisible = false
     private var isDisplayAsleep = false
-    private var lastWrite: ContinuousClock.Instant?
+    /// Time as the poll loop has counted it. The attention span after a write
+    /// is measured against this rather than a wall clock: every other delay in
+    /// the session goes through the injected sleeper, and one span left on
+    /// `ContinuousClock` is two clocks measured against each other.
+    private var pollClock: Duration = .zero
+    private var lastWrite: Duration?
+    /// The device ignores queries issued too soon after the session opens, so
+    /// nothing outside the poll loop may issue one either.
+    private var isWarmedUp = false
 
     private var resumeWaiters: [CheckedContinuation<Void, Never>] = []
     private var pendingRequest: PendingRequest?
@@ -171,7 +179,7 @@ actor ReceiverSession {
     private var pollInterval: Duration {
         guard !isDisplayAsleep else { return timings.idlePoll }
         guard !isPopoverVisible else { return timings.fastPoll }
-        guard let lastWrite, ContinuousClock.now - lastWrite < timings.attentionSpan else { return timings.idlePoll }
+        guard let lastWrite, pollClock - lastWrite < timings.attentionSpan else { return timings.idlePoll }
         return timings.fastPoll
     }
 
@@ -284,8 +292,13 @@ actor ReceiverSession {
 
     /// Wake-from-sleep check: one cheap read. If it does not come back the
     /// normal failure path takes over.
+    ///
+    /// Not during the warm-up: the receiver re-enumerates on wake, so a fresh
+    /// link is exactly what a wake is likely to find — and the device ignores
+    /// a query issued that early. This check reads no answer as a dead link, so
+    /// asking too soon tears down the connection that just came up.
     func recheck() async {
-        guard state.isReady, let link = currentLink else { return }
+        guard state.isReady, isWarmedUp, let link = currentLink else { return }
         logger.info("Rechecking the link after wake")
         let reply = try? await request(.getAttribute, payload: [Attr.noiseCancellation.rawValue], node: .settings, link: link)
         if reply == nil {
@@ -371,6 +384,7 @@ actor ReceiverSession {
 
     private func resetForNewSession() {
         startInstant = .now
+        isWarmedUp = false
         answeredDeviceHeartbeat = false
         deviceHeartbeats = 0
         consecutiveTimeouts = 0
@@ -479,17 +493,17 @@ actor ReceiverSession {
         var waited = Duration.zero
         while !answeredDeviceHeartbeat || waited < timings.warmUp {
             guard !Task.isCancelled else { return nil }
-            guard (try? await sleeper(timings.warmUpTick)) != nil else { return nil }
+            guard await tick(timings.warmUpTick) else { return nil }
             waited += timings.warmUpTick
         }
+        isWarmedUp = true
 
         var isFirst = true
         while !Task.isCancelled {
             // Nothing on screen to keep current. The loop still ticks so it can
-            // notice the display coming back, which costs one wakeup a
-            // ten-second interval.
+            // notice the display coming back, which costs one wakeup a second.
             guard !isDisplayAsleep else {
-                guard (try? await sleeper(timings.fastPoll)) != nil else { return nil }
+                guard await tick(timings.fastPoll) else { return nil }
                 continue
             }
 
@@ -531,9 +545,18 @@ actor ReceiverSession {
         var waited = Duration.zero
         while waited < pollInterval {
             let slice = min(timings.fastPoll, pollInterval - waited)
-            guard (try? await sleeper(slice)) != nil else { return false }
+            guard await tick(slice) else { return false }
             waited += slice
         }
+        return true
+    }
+
+    /// Every wait the poll loop takes, and the only thing that moves
+    /// `pollClock`. One loop advances it so that two concurrent sleepers cannot
+    /// double-count the same second.
+    private func tick(_ duration: Duration) async -> Bool {
+        guard (try? await sleeper(duration)) != nil else { return false }
+        pollClock += duration
         return true
     }
 
@@ -541,7 +564,11 @@ actor ReceiverSession {
     /// the slow interval would show stale numbers to somebody who is looking.
     /// Overlapping the loop is harmless: the request lock serialises them.
     private func pollNow() async {
-        guard state.isReady, let link = currentLink, answeredDeviceHeartbeat else { return }
+        // `isWarmedUp` as well as the heartbeat: a query issued in the first
+        // second is ignored by the device, and asking anyway holds the request
+        // lock for the whole timeout — delaying the loop's first real poll by
+        // more than the popover saved.
+        guard state.isReady, isWarmedUp, let link = currentLink, answeredDeviceHeartbeat else { return }
         guard let reply = try? await request(.getMany, payload: [0], node: .settings, link: link) else { return }
         publishSnapshot(reply)
     }
@@ -786,7 +813,7 @@ extension ReceiverSession {
 
         logger.notice("Set \(attr.name, privacy: .public) = \(value, privacy: .public)")
         // Somebody is changing settings, so they are watching what happens.
-        lastWrite = .now
+        lastWrite = pollClock
         // The set reply carries a status of its own, and a refusal there is the
         // device saying so in as many words. It was being thrown away, leaving
         // the read-back to report the refusal as a value that had not moved.
