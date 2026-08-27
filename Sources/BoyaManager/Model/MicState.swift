@@ -22,10 +22,21 @@ final class MicState {
     /// when it is `.denied`.
     private(set) var notificationPermission: NotificationPermission = .undetermined
 
+    /// The phase of the connecting fade, 0…1, which is all the icon needs to
+    /// draw it. It sits at 1 in every other state.
+    private(set) var iconPulse: Double = 1
+
     private let preferences: Preferences
     private let notifications: any NotificationCentre
+    private let sleeper: @Sendable (Duration) async throws -> Void
     private var session: ReceiverSession?
     private var eventTask: Task<Void, Never>?
+    private var pulseTask: Task<Void, Never>?
+
+    /// One fade out and back. Slow enough to read as breathing rather than as
+    /// blinking, and stepped finely enough that neither end looks like a jump.
+    private static let pulsePeriod = Duration.milliseconds(1_600)
+    private static let pulseTick = Duration.milliseconds(80)
 
     /// One low-battery notification per transmitter per online period.
     private var lowBatteryNotified: Set<Int> = []
@@ -36,9 +47,16 @@ final class MicState {
     /// Long enough to read, short enough not to sit there after the fact.
     private static let errorLifetime = Duration.seconds(8)
 
-    init(preferences: Preferences, notifications: any NotificationCentre = SystemNotificationCentre()) {
+    /// `sleeper` is injected so the fade can be driven on a compressed clock in
+    /// tests, the way `ReceiverSession` takes its delays.
+    init(
+        preferences: Preferences,
+        notifications: any NotificationCentre = SystemNotificationCentre(),
+        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
         self.preferences = preferences
         self.notifications = notifications
+        self.sleeper = sleeper
     }
 
     func attach(to session: ReceiverSession) {
@@ -54,6 +72,39 @@ final class MicState {
     func stop() {
         eventTask?.cancel()
         eventTask = nil
+        pulseTask?.cancel()
+        pulseTask = nil
+    }
+
+    /// `MenuBarExtra` does not vend its `NSStatusItem`, so there is no layer to
+    /// hang a `CABasicAnimation` on, and a SwiftUI animation inside the label
+    /// does not run because the label is rendered to an image. Stepping the
+    /// phase and letting Observation redraw the label is what is left.
+    private func updatePulse() {
+        guard iconKind == .connecting else {
+            pulseTask?.cancel()
+            pulseTask = nil
+            iconPulse = 1
+            return
+        }
+        guard pulseTask == nil else { return }
+        pulseTask = Task { [weak self] in
+            var elapsed = Duration.zero
+            while !Task.isCancelled {
+                guard let self else { return }
+                iconPulse = Self.pulsePhase(at: elapsed)
+                guard (try? await sleeper(Self.pulseTick)) != nil else { return }
+                elapsed += Self.pulseTick
+            }
+        }
+    }
+
+    /// A cosine, so the turn at each end of the fade is gentle rather than a
+    /// corner. The injected sleeper may run faster than real time and this
+    /// takes its phase from the nominal tick, so the fade keeps its shape.
+    private static func pulsePhase(at elapsed: Duration) -> Double {
+        let turns = Double(elapsed.milliseconds) / Double(pulsePeriod.milliseconds)
+        return (1 - cos(2 * .pi * turns)) / 2
     }
 
     // MARK: - intent
@@ -105,6 +156,7 @@ final class MicState {
             }
             if case .failed(let kind) = state { lastError = kind.summary }
             if case .waitingToRetry(let kind, _, _) = state { lastError = kind.summary }
+            updatePulse()
         case .identified(let identity):
             self.identity = identity
         case .snapshot(let snapshot):

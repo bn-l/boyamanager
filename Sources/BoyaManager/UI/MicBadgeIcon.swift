@@ -33,7 +33,9 @@ enum MicBadgeIcon {
         case connecting
     }
 
-    static func image(kind: Kind) -> NSImage {
+    /// `pulse` is the phase of the connecting fade, 0…1. Every other state
+    /// ignores it.
+    static func image(kind: Kind, pulse: Double = 1) -> NSImage {
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else {
                 logger.error("No CGContext available for the badge")
@@ -44,7 +46,7 @@ enum MicBadgeIcon {
             context.saveGState()
             defer { context.restoreGState() }
 
-            let ink = inkColor(kind: kind)
+            let ink = inkColor(kind: kind, pulse: pulse)
             ink.setStroke()
             Geometry.outline.stroke()
 
@@ -77,13 +79,21 @@ enum MicBadgeIcon {
         return image
     }
 
+    /// The connecting icon fades between these two rather than sitting at one
+    /// alpha, so a menu bar that is still trying reads differently from one
+    /// that has stopped. Both stay under `offline`, which is the dimmest state
+    /// that means the receiver is actually answering.
+    private static let pulseLow: CGFloat = 0.18
+    private static let pulseHigh: CGFloat = 0.5
+
     /// White throughout; the state is in the alpha.
-    private static func inkColor(kind: Kind) -> NSColor {
+    private static func inkColor(kind: Kind, pulse: Double) -> NSColor {
         let alpha: CGFloat
         switch kind {
         case .level: alpha = 1
         case .offline: alpha = 0.6
-        case .disconnected, .connecting: alpha = 0.4
+        case .disconnected: alpha = 0.4
+        case .connecting: alpha = pulseLow + (pulseHigh - pulseLow) * CGFloat(min(max(pulse, 0), 1))
         }
         return NSColor(white: 1, alpha: alpha)
     }

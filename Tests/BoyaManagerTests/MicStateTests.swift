@@ -9,11 +9,12 @@ struct MicStateTests {
     /// posted — which is the whole point of the seam.
     private func makeState(
         notifications: Bool = true,
-        centre: FakeNotificationCentre = FakeNotificationCentre(permission: .allowed)
+        centre: FakeNotificationCentre = FakeNotificationCentre(permission: .allowed),
+        sleeper: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) async -> MicState {
         let preferences = Preferences(defaults: scratchUserDefaults())
         preferences.notificationsEnabled = notifications
-        let state = MicState(preferences: preferences, notifications: centre)
+        let state = MicState(preferences: preferences, notifications: centre, sleeper: sleeper)
         await state.refreshNotificationPermission()
         return state
     }
@@ -444,6 +445,57 @@ struct MicStateTests {
         // The receiver is bus-powered; `rx_battery` reads a permanent 4 and is
         // not something to tell anyone about.
         #expect(!state.tooltip.contains("Receiver"))
+    }
+
+    /// Connecting and no-receiver are the same drawing apart from the strike, so
+    /// the fade is what says the app is still trying.
+    @Test("The icon fades while connecting and holds still in every other state")
+    func connectingIconFades() async throws {
+        let state = await makeState { _ in try await Task.sleep(for: .milliseconds(1)) }
+
+        state.apply(.state(.connecting(attempt: 1)))
+        var seen: [Double] = []
+        for _ in 0..<80 {
+            seen.append(state.iconPulse)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+
+        #expect(seen.allSatisfy { (0...1).contains($0) }, "the phase should stay in range")
+        #expect(seen.contains { $0 < 0.3 }, "the fade should reach the dim end")
+        #expect(seen.contains { $0 > 0.7 }, "the fade should reach the lit end")
+
+        state.apply(.state(.ready))
+        #expect(state.iconPulse == 1, "the fade should stop when the app stops connecting")
+        state.stop()
+    }
+
+    @Test("Waiting to retry fades too — it is still trying")
+    func waitingToRetryFades() async throws {
+        let state = await makeState { _ in try await Task.sleep(for: .milliseconds(1)) }
+
+        state.apply(.state(.waitingToRetry(reason: .claimFailed, attempt: 2, seconds: 4)))
+        var seen: Set<Double> = []
+        for _ in 0..<40 {
+            seen.insert(state.iconPulse)
+            try await Task.sleep(for: .milliseconds(2))
+        }
+
+        #expect(state.iconKind == .connecting)
+        #expect(seen.count > 2, "the fade should be running, saw \(seen.count) value(s)")
+        state.stop()
+    }
+
+    @Test("A state that is not connecting leaves the icon at full strength")
+    func settledStatesDoNotFade() async throws {
+        let state = await makeState { _ in try await Task.sleep(for: .milliseconds(1)) }
+
+        for settled in [ConnectionState.ready, .idle, .failed(.claimFailed)] {
+            state.apply(.state(settled))
+            try await Task.sleep(for: .milliseconds(6))
+
+            #expect(state.iconPulse == 1, "\(settled) should not fade")
+        }
+        state.stop()
     }
 }
 

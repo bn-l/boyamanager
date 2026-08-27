@@ -98,6 +98,36 @@ struct MicBadgeIconTests {
         #expect(alphas[1] > alphas[2], "offline should sit between connected and no receiver")
     }
 
+    /// The fade has to be visible or it is not saying anything, and it has to
+    /// stay under `offline` or a receiver that is still being reached looks
+    /// like one that is already answering.
+    @Test("The connecting phase moves the ink and stays below the offline state")
+    func connectingPhaseChangesTheInk() throws {
+        let stem = MicBadgeIcon.Geometry.stemX
+
+        let dim = try #require(try sampler(MicBadgeIcon.image(kind: .connecting, pulse: 0)).at(stem, 7))
+        let lit = try #require(try sampler(MicBadgeIcon.image(kind: .connecting, pulse: 1)).at(stem, 7))
+        let offline = try #require(try sampler(MicBadgeIcon.image(kind: .offline)).at(stem, 7))
+
+        #expect(lit.alphaComponent - dim.alphaComponent > 0.15, "the fade should be visible")
+        #expect(dim.alphaComponent > 0.1, "the dim end should still be drawn")
+        #expect(lit.alphaComponent < offline.alphaComponent, "the lit end should stay under offline")
+    }
+
+    /// Nothing but the connecting state reads the phase, so a value from a
+    /// stopped fade cannot change any other drawing.
+    @Test("Every other state ignores the phase", arguments: [
+        MicBadgeIcon.Kind.level(3, online: 1), .offline, .disconnected,
+    ])
+    func otherStatesIgnoreThePhase(kind: MicBadgeIcon.Kind) throws {
+        let stem = MicBadgeIcon.Geometry.stemX
+
+        let low = try #require(try sampler(MicBadgeIcon.image(kind: kind, pulse: 0)).at(stem, 7))
+        let high = try #require(try sampler(MicBadgeIcon.image(kind: kind, pulse: 1)).at(stem, 7))
+
+        #expect(low.alphaComponent == high.alphaComponent)
+    }
+
     @Test("The letter's stem is always inked, and the canvas corners never are", arguments: [
         MicBadgeIcon.Kind.level(0, online: 0), .level(4, online: 0), .offline,
     ])
