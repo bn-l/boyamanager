@@ -30,6 +30,22 @@ enum FailureKind: Sendable, Equatable {
         case .transport: "the connection dropped"
         }
     }
+
+    /// What the user has to do, for the failures the app cannot get past on its
+    /// own. A receiver that will not start a link stays that way through every
+    /// retry, an app restart, a USB reset and a hub port power toggle — all
+    /// tried on 1 Oct 2026 — which leaves a physical replug.
+    var remedy: String? {
+        switch self {
+        case .noSYN: "Unplug the receiver and plug it back in."
+        case .claimFailed, .noIdentification, .sessionRefused, .unresponsive, .reset, .deviceRemoved, .transport: nil
+        }
+    }
+
+    /// `summary`, followed by the remedy when there is one.
+    var summaryWithRemedy: String {
+        [summary, remedy].compactMap(\.self).joined(separator: ". ")
+    }
 }
 
 enum ReconnectDecision: Sendable, Equatable {

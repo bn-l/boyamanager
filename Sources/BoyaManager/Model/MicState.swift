@@ -256,7 +256,7 @@ final class MicState {
         case let .waitingToRetry(reason, attempt, seconds):
             return "\(reason.summary.capitalizedFirst) — retrying in \(seconds)s (attempt \(attempt))"
         case .failed(let reason):
-            return "Failed: \(reason.summary)"
+            return "Failed: \(reason.summaryWithRemedy)"
         case .idle:
             return "No receiver connected"
         }
@@ -289,10 +289,12 @@ final class MicState {
 
     /// Why the receiver is not connected, for the popover. Nil while it is
     /// connected, connecting, or simply absent: the status pill says all three
-    /// on its own, and the one thing it has no room for is a reason.
+    /// on its own, and the one thing it has no room for is a reason. The remedy
+    /// waits for the give-up: while the app is still retrying, the user has
+    /// nothing to do yet.
     var connectionProblem: String? {
         switch connection {
-        case let .failed(kind): kind.summary.capitalizedFirst
+        case let .failed(kind): kind.summaryWithRemedy.capitalizedFirst
         case let .waitingToRetry(kind, attempt, _): "\(kind.summary.capitalizedFirst) — attempt \(attempt)"
         case .ready, .connecting, .idle: nil
         }

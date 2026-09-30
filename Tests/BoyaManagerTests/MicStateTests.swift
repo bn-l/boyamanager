@@ -379,6 +379,29 @@ struct MicStateTests {
         #expect(state.writeError == nil)
     }
 
+    /// 1 Oct 2026: the receiver went mute after its transmitter left range and
+    /// never sent another SYN, whatever the app did. The popover said only "The
+    /// receiver did not start an iAP2 link", which tells nobody what to do.
+    @Test("Giving up on a receiver that will not start a link says to replug it")
+    func noLinkSaysToReplug() async {
+        let state = await makeState()
+
+        state.apply(.state(.failed(.noSYN)))
+
+        #expect(state.connectionProblem == "The receiver did not start an iAP2 link. Unplug the receiver and plug it back in.")
+        #expect(state.statusLine == "Failed: the receiver did not start an iAP2 link. Unplug the receiver and plug it back in.")
+    }
+
+    @Test("While the app is still retrying, nobody is told to replug yet")
+    func retryingDoesNotSayToReplug() async {
+        let state = await makeState()
+
+        state.apply(.state(.waitingToRetry(reason: .noSYN, attempt: 2, seconds: 2)))
+
+        #expect(state.connectionProblem == "The receiver did not start an iAP2 link — attempt 2")
+        #expect(!state.statusLine.contains("Unplug"))
+    }
+
     /// The popover kept showing the receiver's battery, firmware and a green
     /// "online" transmitter with bars while the footer said "No receiver
     /// connected".
